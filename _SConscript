@@ -1,11 +1,24 @@
-# Build script for the lua plugin. The vendored Lua 5.4 sources in lua54 are compiled directly into the plugin through
+﻿# Build script for the lua plugin. The vendored Lua 5.4 sources in lua54 are compiled directly into the plugin through
 # the lua54.cpp amalgamation (as C++, so lua errors unwind with exceptions), so no external dependency is needed.
 Import("env")
 
 sources = ["lua.cpp", "nvgt_lua_bridge.cpp", "lua54.cpp"]
 
 if ARGUMENTS.get("no_shared_plugins", "0") == "0":
-	env.SharedLibrary(env["PLUGIN_DEST_DIR"] + "/lua", sources, LIBS = env["LIBS"])
+	# The shared plugin is compiled for size; the reflection bridge dispatches through script contexts anyway so raw
+	# interpreter speed is rarely the bottleneck, and a small dll matters more for game distribution.
+	size_env = env.Clone()
+	if size_env["NVGT_TARGET"] == "windows":
+		size_env["CCFLAGS"] = [f for f in size_env["CCFLAGS"] if f != "/O2"] + ["/O1", "/GL", "/Gw"]
+		size_env.Append(LINKFLAGS = ["/LTCG"])
+	else:
+		size_env["CXXFLAGS"] = [f for f in size_env["CXXFLAGS"] if f != "-O3"] + ["-Os", "-fvisibility=hidden", "-fvisibility-inlines-hidden", "-ffunction-sections", "-fdata-sections"]
+		if size_env["NVGT_TARGET"] in ("linux", "android"):
+			size_env.Append(LINKFLAGS = ["-Wl,--gc-sections"])
+		elif size_env["NVGT_TARGET"] == "macos":
+			size_env.Append(LINKFLAGS = ["-Wl,-dead_strip"])
+	shared_objects = [size_env.SharedObject(s[:-4] + "_shared", s) for s in sources]
+	size_env.SharedLibrary(env["PLUGIN_DEST_DIR"] + "/lua", shared_objects, LIBS = env["LIBS"])
 
 static_defines = list(env["CPPDEFINES"]) + [("NVGT_PLUGIN_STATIC", "lua")]
 static_objects = [env.Object(s[:-4] + "_static", s, CPPDEFINES = static_defines) for s in sources]
