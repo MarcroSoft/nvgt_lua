@@ -1,0 +1,13 @@
+# Build script for the lua plugin. The vendored Lua 5.4 sources in lua54 are compiled directly into the plugin through
+# the lua54.cpp amalgamation (as C++, so lua errors unwind with exceptions), so no external dependency is needed.
+Import("env")
+
+sources = ["lua.cpp", "nvgt_lua_bridge.cpp", "lua54.cpp"]
+
+if ARGUMENTS.get("no_shared_plugins", "0") == "0":
+	env.SharedLibrary(env["PLUGIN_DEST_DIR"] + "/lua", sources, LIBS = env["LIBS"])
+
+static_defines = list(env["CPPDEFINES"]) + [("NVGT_PLUGIN_STATIC", "lua")]
+static_objects = [env.Object(s[:-4] + "_static", s, CPPDEFINES = static_defines) for s in sources]
+static = env.StaticLibrary("#build/lib/lua", static_objects)
+Return("static")

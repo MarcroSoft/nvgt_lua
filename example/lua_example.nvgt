@@ -1,0 +1,16 @@
+// Example showing how to run a game written in Lua. Run this from within this directory: nvgt lua_example.nvgt
+#pragma plugin lua
+
+void main() {
+	lua_state@ L = lua_state();
+	L.open_libraries(); // Standard Lua libraries (string, table, math etc).
+	L.expose_nvgt(); // Expose NVGT's entire API to Lua; pass false to only expose the nvgt table without the global fallback.
+	if (!L.exec_file("lua_example.lua")) {
+		println("Lua error: " + L.last_error);
+		return;
+	}
+	// Values can be exchanged in both directions.
+	println("score reported by lua: " + L.get_global_number("score"));
+	L.set_global_string("player_name", "traveler");
+	L.call("farewell");
+}
