@@ -18,6 +18,9 @@
 #include "lua54/lstate.c"
 #include "lua54/lgc.c"
 #include "lua54/llex.c"
+// llex.c defines a next(ls) macro for its own use; undefine it so it cannot clash with std::next when later files
+// pull in standard library headers compiled as C++ (breaks the build with libstdc++).
+#undef next
 #include "lua54/lcode.c"
 #include "lua54/lparser.c"
 #include "lua54/ldebug.c"
