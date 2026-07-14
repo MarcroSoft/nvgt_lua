@@ -1,8 +1,8 @@
-﻿# Build script for the lua plugin. The vendored Lua 5.4 sources in lua54 are compiled directly into the plugin through
-# the lua54.cpp amalgamation (as C++, so lua errors unwind with exceptions), so no external dependency is needed.
+﻿# Build script for the lua plugin. The vendored Lua 5.5 sources in lua55 are compiled directly into the plugin through
+# the lua55.cpp amalgamation (as C++, so lua errors unwind with exceptions), so no external dependency is needed.
 Import("env")
 
-sources = ["lua.cpp", "nvgt_lua_bridge.cpp", "lua54.cpp"]
+sources = ["lua.cpp", "nvgt_lua_bridge.cpp", "lua55.cpp"]
 
 if ARGUMENTS.get("no_shared_plugins", "0") == "0":
 	# The shared plugin is compiled for size; the reflection bridge dispatches through script contexts anyway so raw

@@ -1,5 +1,5 @@
 # lua plugin
-This plugin embeds the Lua 5.4 scripting language into NVGT, letting you write most or all of your game in Lua while a small AngelScript loader boots it. Instead of hand-binding each function, the plugin walks the AngelScript engine's registration tables at runtime and exposes everything it finds — global functions, enums, global properties and object types with their methods, properties and operators — so nearly the entire NVGT API is callable from Lua automatically, including anything registered by other loaded plugins.
+This plugin embeds the Lua 5.5 scripting language into NVGT, letting you write most or all of your game in Lua while a small AngelScript loader boots it. Instead of hand-binding each function, the plugin walks the AngelScript engine's registration tables at runtime and exposes everything it finds — global functions, enums, global properties and object types with their methods, properties and operators — so nearly the entire NVGT API is callable from Lua automatically, including anything registered by other loaded plugins.
 
 ## usage
 ```angelscript
@@ -52,4 +52,4 @@ Note that only what is registered with the engine itself is visible. Functions a
 * Reading dictionary values from Lua requires going through functions that return concrete types; `nvgt.totable` only accepts arrays.
 
 ## building
-The Lua 5.4 sources are vendored under lua54 and compiled into the plugin as a single C++ translation unit (lua54.cpp), so lua errors unwind safely through the bridge with C++ exceptions and no external dependency is needed. Lua is distributed under the MIT license, see doc/OSL/MIT/lua.txt.
+The Lua 5.5 sources are vendored under lua55 and compiled into the plugin as a single C++ translation unit (lua55.cpp), so lua errors unwind safely through the bridge with C++ exceptions and no external dependency is needed. Lua is distributed under the MIT license, see doc/OSL/MIT/lua.txt.

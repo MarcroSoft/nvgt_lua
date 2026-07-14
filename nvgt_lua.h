@@ -1,5 +1,5 @@
 /* nvgt_lua.h - Lua scripting plugin for NVGT
- * Embeds Lua 5.4 and exposes NVGT's entire registered AngelScript API to Lua through runtime reflection.
+ * Embeds Lua 5.5 and exposes NVGT's entire registered AngelScript API to Lua through runtime reflection.
  *
  * NVGT - NonVisual Gaming Toolkit
  * Copyright (c) 2022-2025 Sam Tupy
@@ -16,11 +16,11 @@
 #include <string>
 #include <angelscript.h>
 
-// Lua is deliberately compiled as C++ (see lua54.cpp) so lua_error unwinds with exceptions rather than longjmp;
+// Lua is deliberately compiled as C++ (see lua55.cpp) so lua_error unwinds with exceptions rather than longjmp;
 // therefore the headers must be included without extern "C".
-#include "lua54/lua.h"
-#include "lua54/lauxlib.h"
-#include "lua54/lualib.h"
+#include "lua55/lua.h"
+#include "lua55/lauxlib.h"
+#include "lua55/lualib.h"
 
 class nvgt_lua_bridge;
 

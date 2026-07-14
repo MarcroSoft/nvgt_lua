@@ -1,5 +1,5 @@
 /* lua.cpp - Lua scripting plugin for NVGT
- * Registers the lua_state class with AngelScript. A lua_state embeds a Lua 5.4 interpreter which can expose NVGT's
+ * Registers the lua_state class with AngelScript. A lua_state embeds a Lua 5.5 interpreter which can expose NVGT's
  * entire registered API to Lua code through the reflection bridge in nvgt_lua_bridge.cpp, allowing games to be written
  * mostly or entirely in Lua with a small AngelScript loader.
  *
