@@ -131,6 +131,26 @@ bool lua_state::get_global_bool(const std::string& name) {
 	return v;
 }
 
+bool lua_state::set_global(const std::string& name, void* ref, int type_id) {
+	last_error = "";
+	if (!L) return false;
+	if (!bridge) {
+		last_error = "expose_nvgt must be called before set_global";
+		return false;
+	}
+	return nvgt_lua_bridge_set_global(L, bridge, name, ref, type_id, last_error);
+}
+
+bool lua_state::get_global(const std::string& name, void* ref, int type_id) {
+	last_error = "";
+	if (!L) return false;
+	if (!bridge) {
+		last_error = "expose_nvgt must be called before get_global";
+		return false;
+	}
+	return nvgt_lua_bridge_get_global(L, bridge, name, ref, type_id, last_error);
+}
+
 static lua_state* lua_state_factory() {
 	return new lua_state(g_plugin_engine);
 }
@@ -159,6 +179,8 @@ plugin_main(nvgt_plugin_shared* shared) {
 	engine->RegisterObjectMethod("lua_state", "double get_global_number(const string&in name)", asMETHOD(lua_state, get_global_number), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "string get_global_string(const string&in name)", asMETHOD(lua_state, get_global_string), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "bool get_global_bool(const string&in name)", asMETHOD(lua_state, get_global_bool), asCALL_THISCALL);
+	engine->RegisterObjectMethod("lua_state", "bool set_global(const string&in name, const ?&in value)", asMETHOD(lua_state, set_global), asCALL_THISCALL);
+	engine->RegisterObjectMethod("lua_state", "bool get_global(const string&in name, ?&out value)", asMETHOD(lua_state, get_global), asCALL_THISCALL);
 	engine->RegisterGlobalFunction("string lua_version()", asFUNCTION(lua_version_string), asCALL_CDECL);
 	return true;
 }

@@ -48,8 +48,14 @@ public:
 	double get_global_number(const std::string& name);
 	std::string get_global_string(const std::string& name);
 	bool get_global_bool(const std::string& name);
+	// Variable type accessors (?&in / ?&out), the way objects cross the boundary. Require expose_nvgt first.
+	bool set_global(const std::string& name, void* ref, int type_id);
+	bool get_global(const std::string& name, void* ref, int type_id);
 };
 
 // Installs the nvgt table (and optionally global fallback) into the given lua state. Implemented in nvgt_lua_bridge.cpp.
 nvgt_lua_bridge* nvgt_lua_bridge_create(lua_State* L, asIScriptEngine* engine, bool as_globals);
 void nvgt_lua_bridge_destroy(nvgt_lua_bridge* bridge);
+// Marshal an arbitrary AngelScript value to or from a lua global. ref/type_id follow the ?& calling convention; err receives a message on failure.
+bool nvgt_lua_bridge_set_global(lua_State* L, nvgt_lua_bridge* bridge, const std::string& name, void* ref, int type_id, std::string& err);
+bool nvgt_lua_bridge_get_global(lua_State* L, nvgt_lua_bridge* bridge, const std::string& name, void* ref, int type_id, std::string& err);

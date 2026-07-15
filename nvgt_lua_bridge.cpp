@@ -380,9 +380,10 @@ static bool set_context_arg(lua_State* L, nvgt_lua_bridge* b, asIScriptContext* 
 			if (obj) {
 				asITypeInfo* rti = engine->GetTypeInfoById(dv.getter->GetReturnTypeId());
 				engine->AddRefScriptObject(obj, rti);
-				scratch.temp_objects.push_back({obj, rti});
+				scratch.temp_objects.push_back({obj, rti}); // keeps the object alive until after the call
+				ctx->SetArgObject(i, obj); // and this reference belongs to the callee (plain @ params own their reference)
 			}
-			ctx->SetArgAddress(i, obj);
+			else ctx->SetArgAddress(i, nullptr);
 			return true;
 		}
 		if (!has_lua_arg || lua_isnil(L, lua_idx)) {
@@ -395,15 +396,15 @@ static bool set_context_arg(lua_State* L, nvgt_lua_bridge* b, asIScriptContext* 
 			if (strcmp(pti->GetName(), "array") == 0 && !lua_to_array(L, b, lua_idx, pti, &container)) { err = "cannot convert table to " + std::string(engine->GetTypeDeclaration(tid, true)); return false; }
 			if (strcmp(pti->GetName(), "dictionary") == 0 && !lua_to_dict(L, b, lua_idx, &container)) { err = "cannot convert table to dictionary"; return false; }
 			if (container) {
-				scratch.temp_objects.push_back({container, pti});
-				if (tid & asTYPEID_OBJHANDLE) ctx->SetArgAddress(i, container);
+				scratch.temp_objects.push_back({container, pti}); // keeps the container alive until after the call
+				if (tid & asTYPEID_OBJHANDLE) ctx->SetArgObject(i, container); // handle params own the reference they receive
 				else ctx->SetArgAddress(i, container); // &in reference to the container
 				return true;
 			}
 		}
 		as_object* ud = check_as_object(L, lua_idx);
 		if (!ud) { err = "expected " + std::string(engine->GetTypeDeclaration(base_tid(tid), true)) + " for parameter " + std::to_string(i + 1) + " of " + f->GetDeclaration(); return false; }
-		if (tid & asTYPEID_OBJHANDLE) ctx->SetArgAddress(i, ud->ptr); // borrowed reference, lua userdata keeps it alive during the call
+		if (tid & asTYPEID_OBJHANDLE) ctx->SetArgObject(i, ud->ptr); // adds a reference: plain @ params own the reference they receive (script callers addref too), @+ params get it released by the context
 		else if (flags & (asTM_INREF | asTM_OUTREF)) ctx->SetArgAddress(i, ud->ptr);
 		else ctx->SetArgObject(i, ud->ptr); // by value, the context copies
 		return true;
@@ -1022,6 +1023,105 @@ static int nvgt_todict(lua_State* L) {
 	if (!lua_to_dict(L, b, 1, &dict)) return luaL_error(L, "cannot convert table to dictionary; keys must be strings");
 	push_as_object(L, dict, b->engine->GetTypeInfoByDecl("dictionary"), true);
 	return 1;
+}
+
+// Store an arbitrary AngelScript value (?&in convention: ref points to the value, or to the handle for handle types) in a lua global.
+bool nvgt_lua_bridge_set_global(lua_State* L, nvgt_lua_bridge* b, const std::string& name, void* ref, int type_id, std::string& err) {
+	asIScriptEngine* engine = b->engine;
+	if (!ref || type_id == asTYPEID_VOID) { err = "cannot store a void value"; return false; }
+	if (tid_is_primitive(type_id) || tid_is_enum(engine, type_id)) push_as_value(L, b, ref, type_id);
+	else if (base_tid(type_id) == b->string_tid) {
+		std::string* s = (std::string*)ref;
+		lua_pushlstring(L, s->data(), s->size());
+	}
+	else if (type_id & asTYPEID_MASK_OBJECT) {
+		asITypeInfo* ti = engine->GetTypeInfoById(type_id);
+		if (!ti) { err = "unknown type"; return false; }
+		if (ti->GetFuncdefSignature()) { err = "lua globals cannot hold callbacks"; return false; }
+		if (type_id & asTYPEID_OBJHANDLE) {
+			void* obj = *(void**)ref;
+			if (!obj) lua_pushnil(L);
+			else {
+				engine->AddRefScriptObject(obj, ti);
+				push_as_object(L, obj, ti, true);
+			}
+		}
+		else if (ti->GetFlags() & asOBJ_REF) {
+			engine->AddRefScriptObject(ref, ti);
+			push_as_object(L, ref, ti, true);
+		}
+		else { // value type, lua gets its own copy
+			void* copy = engine->CreateScriptObjectCopy(ref, ti);
+			if (!copy) { err = std::string("could not copy ") + ti->GetName(); return false; }
+			push_as_object(L, copy, ti, true);
+		}
+	}
+	else { err = "unsupported value type"; return false; }
+	lua_setglobal(L, name.c_str());
+	return true;
+}
+
+// Read a lua global into an AngelScript variable (?&out convention: ref points to the caller's variable, a null handle for handle types).
+bool nvgt_lua_bridge_get_global(lua_State* L, nvgt_lua_bridge* b, const std::string& name, void* ref, int type_id, std::string& err) {
+	asIScriptEngine* engine = b->engine;
+	if (!ref || type_id == asTYPEID_VOID) { err = "cannot read into a void value"; return false; }
+	lua_getglobal(L, name.c_str());
+	bool ok = false;
+	if (type_id == asTYPEID_BOOL) {
+		*(char*)ref = lua_toboolean(L, -1) ? 1 : 0;
+		ok = true;
+	}
+	else if (tid_is_primitive(type_id) || tid_is_enum(engine, type_id)) {
+		if (lua_type(L, -1) != LUA_TNUMBER) err = "global '" + name + "' is not a number";
+		else {
+			double num = lua_tonumber(L, -1);
+			if (type_id == asTYPEID_FLOAT) *(float*)ref = (float)num;
+			else if (type_id == asTYPEID_DOUBLE) *(double*)ref = num;
+			else if (type_id == asTYPEID_INT64 || type_id == asTYPEID_UINT64) *(int64_t*)ref = (int64_t)num;
+			else if (type_id == asTYPEID_INT8 || type_id == asTYPEID_UINT8) *(char*)ref = (char)(int64_t)num;
+			else if (type_id == asTYPEID_INT16 || type_id == asTYPEID_UINT16) *(short*)ref = (short)(int64_t)num;
+			else *(int*)ref = (int)(int64_t)num;
+			ok = true;
+		}
+	}
+	else if (base_tid(type_id) == b->string_tid) {
+		if (lua_type(L, -1) != LUA_TSTRING && lua_type(L, -1) != LUA_TNUMBER) err = "global '" + name + "' is not a string";
+		else {
+			size_t len = 0;
+			const char* s = lua_tolstring(L, -1, &len);
+			*(std::string*)ref = std::string(s, len);
+			ok = true;
+		}
+	}
+	else if (type_id & asTYPEID_MASK_OBJECT) {
+		asITypeInfo* target = engine->GetTypeInfoById(type_id);
+		if (!target) err = "unknown type";
+		else if (type_id & asTYPEID_OBJHANDLE) {
+			if (lua_isnil(L, -1)) { // a nil global reads back as a null handle
+				*(void**)ref = nullptr;
+				ok = true;
+			} else {
+				as_object* ud = check_as_object(L, -1);
+				if (!ud || !ud->ptr) err = "global '" + name + "' is not an nvgt object";
+				else {
+					engine->RefCastObject(ud->ptr, ud->ti, target, (void**)ref); // adds a reference on success
+					if (*(void**)ref) ok = true;
+					else err = std::string("global '") + name + "' is a " + ud->ti->GetName() + ", not a " + target->GetName();
+				}
+			}
+		} else {
+			as_object* ud = check_as_object(L, -1);
+			if (!ud || !ud->ptr) err = "global '" + name + "' is not an nvgt object";
+			else if (base_tid(ud->ti->GetTypeId()) != base_tid(type_id)) err = std::string("global '") + name + "' is a " + ud->ti->GetName() + ", not a " + target->GetName();
+			else {
+				engine->AssignScriptObject(ref, ud->ptr, target);
+				ok = true;
+			}
+		}
+	}
+	else err = "unsupported value type";
+	lua_pop(L, 1);
+	return ok;
 }
 
 nvgt_lua_bridge* nvgt_lua_bridge_create(lua_State* L, asIScriptEngine* engine, bool as_globals) {

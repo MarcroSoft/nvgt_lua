@@ -36,6 +36,8 @@ Note that only what is registered with the engine itself is visible. Functions a
 * `string last_error`: message of the last failed exec/exec_file/call.
 * `set_global_number/set_global_string/set_global_bool(const string&in name, value)`: set a Lua global.
 * `get_global_number/get_global_string/get_global_bool(const string&in name)`: read a Lua global.
+* `bool set_global(const string&in name, const ?&in value)`: store any NVGT value in a Lua global — numbers, strings, enums, objects and handles. Requires expose_nvgt. Reference types are shared with Lua; value types are copied.
+* `bool get_global(const string&in name, ?&out value)`: read a Lua global into an AngelScript variable of matching type, e.g. `sound@ s; L.get_global("music", @s);`. Returns false and sets last_error on a type mismatch; a nil global reads back as a null handle.
 * Global function `string lua_version()` returns the embedded Lua release.
 
 ## conversions and helpers
@@ -44,6 +46,7 @@ Note that only what is registered with the engine itself is visible. Functions a
 * Construct objects by calling the type: `nvgt.sound()`, `nvgt.vector(1, 2, 3)`.
 * `nvgt.toarray(table, "int")` converts a Lua sequence to an NVGT array (element type deduced from the first element when omitted); `nvgt.totable(array)` converts back; `nvgt.todict(table)` builds a dictionary from a string-keyed table. Plain Lua tables are also converted automatically when passed where a function expects an array or dictionary.
 * Functions with trailing `&out` parameters return those as extra Lua return values.
+* Objects cross the boundary in both directions through `set_global`/`get_global`: a sound created in Lua can be fetched into a `sound@` in AngelScript and vice versa, with both sides holding references to the same object.
 
 ## limitations
 * Lua functions cannot yet be passed where NVGT expects a callback (funcdef); such parameters are rejected with a clear error.
