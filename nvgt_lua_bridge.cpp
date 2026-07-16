@@ -707,11 +707,8 @@ static int push_field(lua_State* L, nvgt_lua_bridge* b, as_object* ud, asUINT pr
 	return -1;
 }
 
-static bool write_field(lua_State* L, nvgt_lua_bridge* b, as_object* ud, asUINT prop_index, int value_idx) {
-	const char* name; int tid; int offset; bool is_ref; int comp_offset; bool comp_indirect;
-	if (ud->ti->GetProperty(prop_index, &name, &tid, nullptr, nullptr, &offset, &is_ref, nullptr, &comp_offset, &comp_indirect) < 0) return false;
-	if (comp_offset || comp_indirect || is_ref) return false;
-	char* addr = (char*)ud->ptr + offset;
+// Write a Lua value into a raw AngelScript location of the given primitive/enum/string type. Shared by field writes and numeric element assignment.
+static bool write_value_at(lua_State* L, nvgt_lua_bridge* b, char* addr, int tid, int value_idx) {
 	if (tid == asTYPEID_BOOL) { *(char*)addr = lua_toboolean(L, value_idx); return true; }
 	if (tid_is_primitive(tid) || tid_is_enum(b->engine, tid)) {
 		double num = lua_tonumber(L, value_idx);
@@ -732,6 +729,28 @@ static bool write_field(lua_State* L, nvgt_lua_bridge* b, as_object* ud, asUINT 
 	return false;
 }
 
+static bool write_field(lua_State* L, nvgt_lua_bridge* b, as_object* ud, asUINT prop_index, int value_idx) {
+	const char* name; int tid; int offset; bool is_ref; int comp_offset; bool comp_indirect;
+	if (ud->ti->GetProperty(prop_index, &name, &tid, nullptr, nullptr, &offset, &is_ref, nullptr, &comp_offset, &comp_indirect) < 0) return false;
+	if (comp_offset || comp_indirect || is_ref) return false;
+	return write_value_at(L, b, (char*)ud->ptr + offset, tid, value_idx);
+}
+
+// Call a zero-argument integer-returning method (array's length) outside the dispatch machinery.
+static bool call_length_method(nvgt_lua_bridge* b, as_object* ud, func_group* fg, lua_Integer& out) {
+	if (fg->overloads.empty()) return false;
+	asIScriptFunction* f = fg->overloads[0];
+	if (f->GetParamCount() != 0) return false;
+	asIScriptContext* ctx = b->engine->RequestContext();
+	if (!ctx) return false;
+	ctx_guard guard{b->engine, ctx};
+	if (ctx->Prepare(f) < 0) return false;
+	ctx->SetObject(ud->ptr);
+	if (ctx->Execute() != asEXECUTION_FINISHED) return false;
+	out = (lua_Integer)ctx->GetReturnDWord();
+	return true;
+}
+
 // __index for nvgt objects: methods, get_X property accessors, direct fields, numeric opIndex.
 static int obj_index(lua_State* L) {
 	as_object* ud = check_as_object(L, 1);
@@ -741,6 +760,20 @@ static int obj_index(lua_State* L) {
 	if (lua_type(L, 2) == LUA_TNUMBER) {
 		auto it = tc.methods.find("opIndex");
 		if (it == tc.methods.end()) return luaL_error(L, "%s does not support indexing", ud->ti->GetName());
+		// The Lua side is 1-based while AngelScript containers are 0-based, so integer keys are shifted here (and in obj_newindex). Arrays also yield nil out of range so ipairs and the t[i] == nil idiom behave like native tables.
+		if (lua_isinteger(L, 2)) {
+			lua_Integer idx = lua_tointeger(L, 2);
+			if (strcmp(ud->ti->GetName(), "array") == 0) {
+				auto len_it = tc.methods.find("length");
+				lua_Integer len;
+				if (len_it != tc.methods.end() && call_length_method(b, ud, &len_it->second, len) && (idx < 1 || idx > len)) {
+					lua_pushnil(L);
+					return 1;
+				}
+			}
+			lua_pushinteger(L, idx - 1);
+			lua_replace(L, 2);
+		}
 		return dispatch(L, b, &it->second, ud->ptr, 2);
 	}
 	const char* key = luaL_checkstring(L, 2);
@@ -768,6 +801,36 @@ static int obj_newindex(lua_State* L) {
 	nvgt_lua_bridge* b = get_bridge(L);
 	if (!ud || !b) return luaL_error(L, "invalid nvgt object");
 	type_cache& tc = b->get_type_cache(ud->ti);
+	if (lua_type(L, 2) == LUA_TNUMBER && lua_isinteger(L, 2)) {
+		// t[i] = v: run opIndex(i-1) and write the value through the returned element reference. Assigning out of range raises the container's own exception; unlike Lua tables, AngelScript arrays don't grow on assignment.
+		auto it = tc.methods.find("opIndex");
+		if (it == tc.methods.end()) return luaL_error(L, "%s does not support numeric assignment", ud->ti->GetName());
+		asIScriptFunction* f = nullptr;
+		for (asIScriptFunction* cand : it->second.overloads) {
+			asDWORD rflags = 0;
+			cand->GetReturnTypeId(&rflags);
+			if (cand->GetParamCount() != 1 || !(rflags & asTM_INOUTREF)) continue;
+			f = cand;
+			if (!cand->IsReadOnly()) break; // prefer the mutable overload
+		}
+		if (!f) return luaL_error(L, "%s does not expose an assignable element reference", ud->ti->GetName());
+		asIScriptContext* ctx = b->engine->RequestContext();
+		if (!ctx) return luaL_error(L, "could not acquire script context");
+		ctx_guard guard{b->engine, ctx};
+		if (ctx->Prepare(f) < 0) return luaL_error(L, "failed to prepare context for %s", f->GetDeclaration());
+		ctx->SetObject(ud->ptr);
+		int ptid = 0;
+		f->GetParam(0, &ptid);
+		lua_Integer idx = lua_tointeger(L, 2) - 1; // the Lua side is 1-based
+		if (ptid == asTYPEID_INT64 || ptid == asTYPEID_UINT64) ctx->SetArgQWord(0, (asQWORD)idx);
+		else ctx->SetArgDWord(0, (asDWORD)idx);
+		int r = ctx->Execute();
+		if (r != asEXECUTION_FINISHED) return luaL_error(L, "%s", r == asEXECUTION_EXCEPTION ? ctx->GetExceptionString() : "script execution did not finish normally");
+		int rtid = f->GetReturnTypeId();
+		char* addr = (char*)ctx->GetReturnAddress();
+		if (!addr || !write_value_at(L, b, addr, rtid, 3)) return luaL_error(L, "cannot assign this value to %s elements", ud->ti->GetName());
+		return 0;
+	}
 	const char* key = luaL_checkstring(L, 2);
 	auto sit = tc.methods.find(std::string("set_") + key);
 	if (sit != tc.methods.end()) {
