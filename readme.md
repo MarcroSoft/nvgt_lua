@@ -34,6 +34,7 @@ Note that only what is registered with the engine itself is visible. Functions a
 * `bool exec_file(const string&in filename)`: run a Lua file (path is relative to the working directory).
 * `bool call(const string&in function_name)`: call a global Lua function without arguments.
 * `string last_error`: message of the last failed exec/exec_file/call.
+* `lua_status last_error_code`: Lua status of the last failed exec/exec_file/call — LUA_OK, LUA_ERRRUN, LUA_ERRSYNTAX, LUA_ERRMEM, LUA_ERRERR or LUA_ERRFILE. A syntax or file error means the code never started running; a runtime error means it failed partway through, so globals may have been modified. call reports a missing function as LUA_ERRRUN.
 * `set_global_number/set_global_string/set_global_bool(const string&in name, value)`: set a Lua global.
 * `get_global_number/get_global_string/get_global_bool(const string&in name)`: read a Lua global.
 * `bool set_global(const string&in name, const ?&in value)`: store any NVGT value in a Lua global — numbers, strings, enums, objects and handles. Requires expose_nvgt. Reference types are shared with Lua; value types are copied.

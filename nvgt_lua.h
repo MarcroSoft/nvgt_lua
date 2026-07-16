@@ -32,6 +32,7 @@ public:
 	asIScriptEngine* engine;
 	nvgt_lua_bridge* bridge; // Created by expose_nvgt, owned by this object.
 	std::string last_error;
+	int last_error_code = LUA_OK; // Lua status of the last failed exec/exec_file/call: LUA_ERRSYNTAX means the code never ran, LUA_ERRRUN that it failed while running.
 	lua_state(asIScriptEngine* engine);
 	~lua_state();
 	void add_ref();
@@ -42,6 +43,7 @@ public:
 	bool exec_file(const std::string& filename);
 	bool call(const std::string& function_name);
 	std::string get_last_error() const { return last_error; }
+	int get_last_error_code() const { return last_error_code; }
 	void set_global_number(const std::string& name, double value);
 	void set_global_string(const std::string& name, const std::string& value);
 	void set_global_bool(const std::string& name, bool value);

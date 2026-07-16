@@ -44,11 +44,13 @@ void lua_state::expose_nvgt(bool as_globals) {
 bool lua_state::exec(const std::string& code, const std::string& chunkname) {
 	if (!L) return false;
 	last_error = "";
+	last_error_code = LUA_OK;
 	int r = luaL_loadbuffer(L, code.data(), code.size(), chunkname.empty() ? "=nvgt" : chunkname.c_str());
 	if (r == LUA_OK) r = lua_pcall(L, 0, 0, 0);
 	if (r != LUA_OK) {
 		const char* msg = lua_tostring(L, -1);
 		last_error = msg ? msg : "unknown lua error";
+		last_error_code = r;
 		lua_pop(L, 1);
 		return false;
 	}
@@ -58,11 +60,13 @@ bool lua_state::exec(const std::string& code, const std::string& chunkname) {
 bool lua_state::exec_file(const std::string& filename) {
 	if (!L) return false;
 	last_error = "";
+	last_error_code = LUA_OK;
 	int r = luaL_loadfile(L, filename.c_str());
 	if (r == LUA_OK) r = lua_pcall(L, 0, 0, 0);
 	if (r != LUA_OK) {
 		const char* msg = lua_tostring(L, -1);
 		last_error = msg ? msg : "unknown lua error";
+		last_error_code = r;
 		lua_pop(L, 1);
 		return false;
 	}
@@ -72,15 +76,19 @@ bool lua_state::exec_file(const std::string& filename) {
 bool lua_state::call(const std::string& function_name) {
 	if (!L) return false;
 	last_error = "";
+	last_error_code = LUA_OK;
 	lua_getglobal(L, function_name.c_str());
 	if (!lua_isfunction(L, -1)) {
 		lua_pop(L, 1);
 		last_error = "no such function " + function_name;
+		last_error_code = LUA_ERRRUN;
 		return false;
 	}
-	if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+	int r = lua_pcall(L, 0, 0, 0);
+	if (r != LUA_OK) {
 		const char* msg = lua_tostring(L, -1);
 		last_error = msg ? msg : "unknown lua error";
+		last_error_code = r;
 		lua_pop(L, 1);
 		return false;
 	}
@@ -163,6 +171,13 @@ plugin_main(nvgt_plugin_shared* shared) {
 	if (!prepare_plugin(shared)) return false;
 	asIScriptEngine* engine = shared->script_engine;
 	g_plugin_engine = engine;
+	engine->RegisterEnum("lua_status");
+	engine->RegisterEnumValue("lua_status", "LUA_OK", LUA_OK);
+	engine->RegisterEnumValue("lua_status", "LUA_ERRRUN", LUA_ERRRUN);
+	engine->RegisterEnumValue("lua_status", "LUA_ERRSYNTAX", LUA_ERRSYNTAX);
+	engine->RegisterEnumValue("lua_status", "LUA_ERRMEM", LUA_ERRMEM);
+	engine->RegisterEnumValue("lua_status", "LUA_ERRERR", LUA_ERRERR);
+	engine->RegisterEnumValue("lua_status", "LUA_ERRFILE", LUA_ERRFILE);
 	engine->RegisterObjectType("lua_state", 0, asOBJ_REF);
 	engine->RegisterObjectBehaviour("lua_state", asBEHAVE_FACTORY, "lua_state@ f()", asFUNCTION(lua_state_factory), asCALL_CDECL);
 	engine->RegisterObjectBehaviour("lua_state", asBEHAVE_ADDREF, "void f()", asMETHOD(lua_state, add_ref), asCALL_THISCALL);
@@ -173,6 +188,7 @@ plugin_main(nvgt_plugin_shared* shared) {
 	engine->RegisterObjectMethod("lua_state", "bool exec_file(const string&in filename)", asMETHOD(lua_state, exec_file), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "bool call(const string&in function_name)", asMETHOD(lua_state, call), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "string get_last_error() const property", asMETHOD(lua_state, get_last_error), asCALL_THISCALL);
+	engine->RegisterObjectMethod("lua_state", "lua_status get_last_error_code() const property", asMETHOD(lua_state, get_last_error_code), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "void set_global_number(const string&in name, double value)", asMETHOD(lua_state, set_global_number), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "void set_global_string(const string&in name, const string&in value)", asMETHOD(lua_state, set_global_string), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "void set_global_bool(const string&in name, bool value)", asMETHOD(lua_state, set_global_bool), asCALL_THISCALL);
