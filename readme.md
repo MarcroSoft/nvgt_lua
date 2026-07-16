@@ -44,7 +44,7 @@ Note that only what is registered with the engine itself is visible. Functions a
 ## conversions and helpers
 * Numbers, strings, booleans and enums convert automatically in both directions; enum constants are available by name, e.g. `nvgt.KEY_RETURN`.
 * Wrapped NVGT containers are 1-based from Lua: `arr[1]` is the first element even though the same array is 0-based in AngelScript. Arrays read `nil` out of range so `ipairs` and the `t[i] == nil` idiom work, and `arr[i] = v` assigns through the element reference (primitives, enums and strings; assigning out of range is an error — NVGT arrays don't grow on assignment, use `arr.insert_last(v)`).
-* NVGT objects appear in Lua as userdata: call methods with `:`, access properties and fields with `.`, index with `[]` (0-based, as in AngelScript), and use `#`, `+`, `-`, `*`, `/`, `%`, unary minus and comparisons where the type implements the matching AngelScript operator methods.
+* NVGT objects appear in Lua as userdata: call methods with `:`, access properties and fields with `.`, index with `[]` (1-based on the Lua side), and use `#`, `+`, `-`, `*`, `/`, `%`, unary minus and comparisons where the type implements the matching AngelScript operator methods.
 * Construct objects by calling the type: `nvgt.sound()`, `nvgt.vector(1, 2, 3)`.
 * `nvgt.toarray(table, "int")` converts a Lua sequence to an NVGT array (element type deduced from the first element when omitted); `nvgt.totable(array)` converts back; `nvgt.todict(table)` builds a dictionary from a string-keyed table. Plain Lua tables are also converted automatically when passed where a function expects an array or dictionary.
 * Functions with trailing `&out` parameters return those as extra Lua return values.

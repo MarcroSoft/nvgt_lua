@@ -12,7 +12,7 @@ println(string.format("vector sum: %g %g %g, length %g", c.x, c.y, c.z, c:length
 -- Arrays and dictionaries convert to and from lua tables.
 local names = nvgt.toarray({"jazz", "blues", "rock"}, "string")
 println("joined: " .. nvgt.join(names, ", "))
-println("first element: " .. names[0]) -- AngelScript arrays are 0-based.
+println("first element: " .. names[1]) -- 1-based from Lua, even though the same array is 0-based in AngelScript.
 
 -- Globals defined here are visible to the hosting AngelScript through the lua_state object.
 score = 1422
