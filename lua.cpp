@@ -33,7 +33,13 @@ void lua_state::release() {
 }
 
 void lua_state::open_libraries() {
-	if (L) luaL_openlibs(L);
+	if (!L) return;
+	luaL_openlibs(L);
+	// Keep require game-local: package.preload plus the working directory. The stock search path probes
+	// machine-wide Lua installs relative to the host executable, which never apply to an NVGT game and
+	// just bloat "module not found" errors. C module loading is disabled entirely; binary modules built
+	// against a standalone Lua would not be ABI compatible with the interpreter embedded here anyway.
+	luaL_dostring(L, "package.path = './?.lua;./?/init.lua' package.cpath = '' package.searchers[4] = nil package.searchers[3] = nil");
 }
 
 void lua_state::expose_nvgt(bool as_globals) {
