@@ -28,7 +28,7 @@ wait(50)
 Note that only what is registered with the engine itself is visible. Functions and classes written in AngelScript includes such as speech.nvgt (`speak` and friends) live in the compiled script module, not the engine, so they cannot be called from Lua; use the underlying registered functions like `screen_reader_speak` and `tts_voice` instead.
 
 ## lua_state members
-* `void open_libraries()`: opens Lua's standard libraries. `require` is game-local: it searches `package.preload` and the working directory (`./?.lua`, `./?/init.lua`) only — no machine-wide Lua installs, and C module loading is disabled (binary modules built against a standalone Lua wouldn't be ABI compatible with the embedded interpreter). Extend `package.path` from Lua if you need more.
+* `void open_libraries()`: opens Lua's standard libraries. `require` is game-local: it searches `package.preload` and the working directory (`./?.lua`, `./?.out` for precompiled bytecode, `./?/init.lua`) only — no machine-wide Lua installs, and C module loading is disabled (binary modules built against a standalone Lua wouldn't be ABI compatible with the embedded interpreter). Extend `package.path` from Lua if you need more.
 * `void expose_nvgt(bool as_globals = true)`: installs the NVGT bridge.
 * `bool exec(const string&in code, const string&in chunkname = "")`: run a string of Lua code.
 * `bool exec_file(const string&in filename)`: run a Lua file (path is relative to the working directory).
