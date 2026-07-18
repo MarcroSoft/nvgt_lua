@@ -48,6 +48,7 @@ Note that only what is registered with the engine itself is visible. Functions a
 * Construct objects by calling the type: `nvgt.sound()`, `nvgt.vector(1, 2, 3)`.
 * `nvgt.toarray(table, "int")` converts a Lua sequence to an NVGT array (element type deduced from the first element when omitted); `nvgt.totable(array)` converts back; `nvgt.todict(table)` builds a dictionary from a string-keyed table. Plain Lua tables are also converted automatically when passed where a function expects an array or dictionary.
 * Functions with trailing `&out` parameters return those as extra Lua return values.
+* Sound and mixer `pan` and `volume` use linear scales from Lua rather than the BGT-style db scales AngelScript uses: pan runs -100 (fully left) to 100 (fully right) proportionally, and volume maps -100 (silent) to 0 (full) linearly to amplitude, so -50 is half amplitude. The bridge converts at the boundary; the same object read from AngelScript still reports db values.
 * Objects cross the boundary in both directions through `set_global`/`get_global`: a sound created in Lua can be fetched into a `sound@` in AngelScript and vice versa, with both sides holding references to the same object.
 
 ## limitations
