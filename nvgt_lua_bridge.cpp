@@ -1198,6 +1198,42 @@ bool nvgt_lua_bridge_set_global(lua_State* L, nvgt_lua_bridge* b, const std::str
 }
 
 // Read a lua global into an AngelScript variable (?&out convention: ref points to the caller's variable, a null handle for handle types).
+// get_global: a raw lua table global reads directly into an array<T>@ or dictionary@, converting the same way
+// tables do at call boundaries. The conversion dispatches element inserts which can raise lua errors, and
+// get_global is entered from AngelScript with no pcall frame active, so it must run protected here; an
+// unprotected raise would reach lua's panic handler and abort the process.
+struct table_conv_request {
+	nvgt_lua_bridge* b;
+	asITypeInfo* target;
+	void* result = nullptr;
+};
+static int protected_table_conv(lua_State* L) {
+	table_conv_request* req = (table_conv_request*)lua_touserdata(L, 1);
+	std::string err;
+	bool ok = strcmp(req->target->GetName(), "dictionary") == 0 ? lua_to_dict(L, req->b, 2, &req->result)
+	          : lua_to_array(L, req->b, 2, req->target, &req->result, nullptr, &err);
+	if (!ok) return luaL_error(L, "%s", err.empty() ? "cannot convert table" : err.c_str());
+	return 0;
+}
+// Converts the table on top of the lua stack into a fresh container whose single reference the caller owns.
+static bool get_global_table_conv(lua_State* L, nvgt_lua_bridge* b, asITypeInfo* target, void** out, std::string& err) {
+	table_conv_request req{b, target};
+	lua_pushcfunction(L, protected_table_conv);
+	lua_pushlightuserdata(L, &req);
+	lua_pushvalue(L, -3); // the table sits below the two pushes
+	if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+		const char* msg = lua_tostring(L, -1);
+		err = msg ? msg : "table conversion failed";
+		lua_pop(L, 1);
+		return false;
+	}
+	*out = req.result;
+	return true;
+}
+static bool is_table_container_target(asITypeInfo* target) {
+	return target && (strcmp(target->GetName(), "array") == 0 || strcmp(target->GetName(), "dictionary") == 0);
+}
+
 bool nvgt_lua_bridge_get_global(lua_State* L, nvgt_lua_bridge* b, const std::string& name, void* ref, int type_id, std::string& err) {
 	asIScriptEngine* engine = b->engine;
 	if (!ref || type_id == asTYPEID_VOID) { err = "cannot read into a void value"; return false; }
@@ -1238,21 +1274,38 @@ bool nvgt_lua_bridge_get_global(lua_State* L, nvgt_lua_bridge* b, const std::str
 				ok = true;
 			} else {
 				as_object* ud = check_as_object(L, -1);
-				if (!ud || !ud->ptr) err = "global '" + name + "' is not an nvgt object";
-				else {
+				if (ud && ud->ptr) {
 					engine->RefCastObject(ud->ptr, ud->ti, target, (void**)ref); // adds a reference on success
 					if (*(void**)ref) ok = true;
 					else err = std::string("global '") + name + "' is a " + ud->ti->GetName() + ", not a " + target->GetName();
 				}
+				else if (lua_istable(L, -1) && is_table_container_target(target)) {
+					void* obj = nullptr;
+					if (get_global_table_conv(L, b, target, &obj, err)) {
+						*(void**)ref = obj; // the fresh container's single reference transfers to the out handle
+						ok = true;
+					}
+				}
+				else err = "global '" + name + "' is not an nvgt object";
 			}
 		} else {
 			as_object* ud = check_as_object(L, -1);
-			if (!ud || !ud->ptr) err = "global '" + name + "' is not an nvgt object";
-			else if (base_tid(ud->ti->GetTypeId()) != base_tid(type_id)) err = std::string("global '") + name + "' is a " + ud->ti->GetName() + ", not a " + target->GetName();
-			else {
-				engine->AssignScriptObject(ref, ud->ptr, target);
-				ok = true;
+			if (ud && ud->ptr) {
+				if (base_tid(ud->ti->GetTypeId()) != base_tid(type_id)) err = std::string("global '") + name + "' is a " + ud->ti->GetName() + ", not a " + target->GetName();
+				else {
+					engine->AssignScriptObject(ref, ud->ptr, target);
+					ok = true;
+				}
 			}
+			else if (lua_istable(L, -1) && is_table_container_target(target)) {
+				void* obj = nullptr;
+				if (get_global_table_conv(L, b, target, &obj, err)) {
+					engine->AssignScriptObject(ref, obj, target);
+					engine->ReleaseScriptObject(obj, target);
+					ok = true;
+				}
+			}
+			else err = "global '" + name + "' is not an nvgt object";
 		}
 	}
 	else err = "unsupported value type";

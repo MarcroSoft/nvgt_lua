@@ -38,7 +38,7 @@ Note that only what is registered with the engine itself is visible. Functions a
 * `set_global_number/set_global_string/set_global_bool(const string&in name, value)`: set a Lua global.
 * `get_global_number/get_global_string/get_global_bool(const string&in name)`: read a Lua global.
 * `bool set_global(const string&in name, const ?&in value)`: store any NVGT value in a Lua global — numbers, strings, enums, objects and handles. Requires expose_nvgt. Reference types are shared with Lua; value types are copied.
-* `bool get_global(const string&in name, ?&out value)`: read a Lua global into an AngelScript variable of matching type, e.g. `sound@ s; L.get_global("music", @s);`. Returns false and sets last_error on a type mismatch; a nil global reads back as a null handle.
+* `bool get_global(const string&in name, ?&out value)`: read a Lua global into an AngelScript variable of matching type, e.g. `sound@ s; L.get_global("music", @s);`. Returns false and sets last_error on a type mismatch; a nil global reads back as a null handle. A plain Lua table global reads directly into an `array<T>@` (element type taken from the handle) or `dictionary@`, converting the same way tables do when passed to functions.
 * Global function `string lua_version()` returns the embedded Lua release.
 
 ## conversions and helpers
