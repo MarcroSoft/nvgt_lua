@@ -15,6 +15,7 @@
 
 #define NVGT_PLUGIN_INCLUDE
 #include "../../src/nvgt_plugin.h"
+#include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <deque>
@@ -283,6 +284,52 @@ struct ctx_guard {
 	~ctx_guard() { if (ctx) { ctx->Unprepare(); engine->ReturnContext(ctx); } }
 };
 
+// Releases a script object on scope exit unless disarmed, so half-built containers don't leak when a lua error unwinds.
+struct obj_guard {
+	asIScriptEngine* engine;
+	void* obj;
+	asITypeInfo* ti;
+	~obj_guard() { if (obj) engine->ReleaseScriptObject(obj, ti); }
+};
+
+// NVGT's default audio engine interprets sound/mixer pan as BGT-style db (pan_db_to_linear in src/sound.cpp), where
+// -10 already sits over two thirds of the way left. Lua carries no BGT legacy, so the bridge presents a linear
+// -100 (fully left) .. 100 (fully right) scale instead, converting to/from the db curve at this boundary only;
+// AngelScript behavior is untouched. These mirror sound.cpp's pan_db_to_linear/pan_linear_to_db exactly.
+static float lua_pan_to_db(float p) {
+	p = p < -100.0f ? -100.0f : (p > 100.0f ? 100.0f : p);
+	float m = fabsf(p) / 100.0f;
+	float db = m >= 1.0f ? 100.0f : -20.0f * log10f(1.0f - m);
+	if (db > 100.0f) db = 100.0f;
+	return p < 0 ? -db : db;
+}
+static float db_pan_to_lua(float db) {
+	db = db < -100.0f ? -100.0f : (db > 100.0f ? 100.0f : db);
+	float m = 1.0f - powf(10.0f, -fabsf(db) / 20.0f);
+	return (db < 0 ? -m : m) * 100.0f;
+}
+// Volume likewise: NVGT speaks BGT-style db volume (0 full .. -100 silent, exponential), where already -50 is
+// practically inaudible. Lua keeps the familiar -100..0 range but maps it linearly to amplitude (-50 is half
+// amplitude), converting through the db scale the engine expects.
+static float lua_vol_to_db(float v) {
+	v = v < -100.0f ? -100.0f : (v > 0.0f ? 0.0f : v);
+	float a = (v + 100.0f) / 100.0f;
+	if (a <= 0.00001f) return -100.0f;
+	float db = 20.0f * log10f(a);
+	return db < -100.0f ? -100.0f : db;
+}
+static float db_vol_to_lua(float db) {
+	float a = powf(10.0f, db / 20.0f);
+	if (a > 1.0f) a = 1.0f;
+	return a * 100.0f - 100.0f;
+}
+// The types whose pan/volume speak BGT db on the default engine (PERCENTAGE_ATTRIBUTES in src/sound.cpp).
+static bool is_bgt_scale_type(asITypeInfo* ti) {
+	if (!ti) return false;
+	const char* n = ti->GetName();
+	return strcmp(n, "sound") == 0 || strcmp(n, "mixer") == 0;
+}
+
 static bool lua_to_array(lua_State* L, nvgt_lua_bridge* b, int idx, asITypeInfo* ti, void** out, asITypeInfo** used_ti = nullptr, std::string* err = nullptr);
 static bool lua_to_dict(lua_State* L, nvgt_lua_bridge* b, int idx, void** out);
 static void push_as_value(lua_State* L, nvgt_lua_bridge* b, void* addr, int tid);
@@ -487,6 +534,22 @@ static void push_as_value(lua_State* L, nvgt_lua_bridge* b, void* addr, int tid)
 static int dispatch(lua_State* L, nvgt_lua_bridge* b, func_group* fg, void* this_obj, int first_arg) {
 	int nargs = lua_gettop(L) - first_arg + 1;
 	if (nargs < 0) nargs = 0;
+	// Pan and volume cross between lua's linear scales and the engine's db scales here; dispatch covers both the
+	// snd.pan property syntax and snd:set_pan() method calls.
+	bool linear_pan_get = false, linear_vol_get = false;
+	if (this_obj && !fg->overloads.empty() && is_bgt_scale_type(fg->overloads[0]->GetObjectType())) {
+		const char* fn = fg->overloads[0]->GetName();
+		if (strcmp(fn, "set_pan") == 0 && nargs >= 1 && lua_type(L, first_arg) == LUA_TNUMBER) {
+			lua_pushnumber(L, lua_pan_to_db((float)lua_tonumber(L, first_arg)));
+			lua_replace(L, first_arg);
+		}
+		else if (strcmp(fn, "get_pan") == 0) linear_pan_get = true;
+		else if (strcmp(fn, "set_volume") == 0 && nargs >= 1 && lua_type(L, first_arg) == LUA_TNUMBER) {
+			lua_pushnumber(L, lua_vol_to_db((float)lua_tonumber(L, first_arg)));
+			lua_replace(L, first_arg);
+		}
+		else if (strcmp(fn, "get_volume") == 0) linear_vol_get = true;
+	}
 	asIScriptFunction* best = nullptr;
 	int best_score = -1;
 	for (asIScriptFunction* f : fg->overloads) {
@@ -528,7 +591,13 @@ static int dispatch(lua_State* L, nvgt_lua_bridge* b, func_group* fg, void* this
 		else msg = "script execution did not finish normally";
 		return luaL_error(L, "%s", msg.c_str());
 	}
-	return push_context_results(L, b, ctx, best, scratch);
+	int nres = push_context_results(L, b, ctx, best, scratch);
+	if ((linear_pan_get || linear_vol_get) && nres >= 1 && lua_type(L, -1) == LUA_TNUMBER) {
+		float converted = linear_pan_get ? db_pan_to_lua((float)lua_tonumber(L, -1)) : db_vol_to_lua((float)lua_tonumber(L, -1));
+		lua_pushnumber(L, converted);
+		lua_replace(L, -2);
+	}
+	return nres;
 }
 
 // Convert a lua table (sequence) to a script array by creating one through the engine and filling it with its own
@@ -557,15 +626,17 @@ static bool lua_to_array(lua_State* L, nvgt_lua_bridge* b, int idx, asITypeInfo*
 	}
 	void* arr = engine->CreateScriptObject(ti);
 	if (!arr) { if (err) *err = std::string("CreateScriptObject failed for ") + ti->GetName(); return false; }
+	obj_guard guard{engine, arr, ti};
 	type_cache& tc = b->get_type_cache(ti);
 	auto insert = tc.methods.find("insert_last");
 	if (insert == tc.methods.end()) insert = tc.methods.find("insertLast");
-	if (insert == tc.methods.end()) { engine->ReleaseScriptObject(arr, ti); if (err) *err = std::string("no insert_last method on ") + ti->GetName(); return false; }
+	if (insert == tc.methods.end()) { if (err) *err = std::string("no insert_last method on ") + ti->GetName(); return false; }
 	for (lua_Integer i = 1; i <= n; i++) {
 		lua_geti(L, idx, i);
-		dispatch(L, b, &insert->second, arr, lua_gettop(L)); // raises a lua error on element type mismatch, leaking arr; accepted for this failure path
+		dispatch(L, b, &insert->second, arr, lua_gettop(L)); // raises a lua error on element type mismatch, the guard then releases the half-built array
 		lua_pop(L, 1);
 	}
+	guard.obj = nullptr; // success, the caller owns arr
 	*out = arr;
 	if (used_ti) *used_ti = ti;
 	return true;
@@ -579,17 +650,19 @@ static bool lua_to_dict(lua_State* L, nvgt_lua_bridge* b, int idx, void** out) {
 	idx = lua_absindex(L, idx);
 	void* dict = engine->CreateScriptObject(ti);
 	if (!dict) return false;
+	obj_guard guard{engine, dict, ti};
 	type_cache& tc = b->get_type_cache(ti);
 	auto set = tc.methods.find("set");
-	if (set == tc.methods.end()) { engine->ReleaseScriptObject(dict, ti); return false; }
+	if (set == tc.methods.end()) return false;
 	lua_pushnil(L);
 	while (lua_next(L, idx)) {
-		if (lua_type(L, -2) != LUA_TSTRING) { lua_pop(L, 2); engine->ReleaseScriptObject(dict, ti); return false; }
+		if (lua_type(L, -2) != LUA_TSTRING) { lua_pop(L, 2); return false; }
 		lua_pushvalue(L, -2); // key copy
 		lua_pushvalue(L, -2); // value copy
-		dispatch(L, b, &set->second, dict, lua_gettop(L) - 1);
+		dispatch(L, b, &set->second, dict, lua_gettop(L) - 1); // raises a lua error on an unconvertible value, the guard then releases the half-built dictionary
 		lua_pop(L, 3); // both copies and the original value; key stays for lua_next
 	}
+	guard.obj = nullptr; // success, the caller owns dict
 	*out = dict;
 	return true;
 }
