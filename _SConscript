@@ -4,7 +4,14 @@ Import("env")
 
 sources = ["lua.cpp", "nvgt_lua_bridge.cpp", "lua55.cpp"]
 
-if ARGUMENTS.get("no_shared_plugins", "0") == "0":
+# iOS has no system(); lua's loslib only knows that when LUA_USE_IOS is defined (see lua55/loslib.c), which also
+# turns on full POSIX mode via luaconf.h. Without it, lua55.cpp fails to compile against the iphoneos SDK.
+if env["NVGT_TARGET"] == "ios":
+	env = env.Clone()
+	env.Append(CPPDEFINES = ["LUA_USE_IOS"])
+
+# iOS distribution cannot load shared library plugins; only the static lib is useful there.
+if ARGUMENTS.get("no_shared_plugins", "0") == "0" and env["NVGT_TARGET"] != "ios":
 	# The shared plugin is compiled for size; the reflection bridge dispatches through script contexts anyway so raw
 	# interpreter speed is rarely the bottleneck, and a small dll matters more for game distribution.
 	size_env = env.Clone()
