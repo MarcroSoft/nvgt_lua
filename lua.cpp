@@ -3,9 +3,8 @@
  * entire registered API to Lua code through the reflection bridge in nvgt_lua_bridge.cpp, allowing games to be written
  * mostly or entirely in Lua with a small AngelScript loader.
  *
- * NVGT - NonVisual Gaming Toolkit
- * Copyright (c) 2022-2025 Sam Tupy
- * https://nvgt.dev
+ * Plugin for NVGT - NonVisual Gaming Toolkit (https://nvgt.dev)
+ * Copyright (c) 2026 MarcroSoft
  * This software is provided "as-is", without any express or implied warranty. In no event will the authors be held liable for any damages arising from the use of this software.
  * Permission is granted to anyone to use this software for any purpose, including commercial applications, and to alter it and redistribute it freely, subject to the following restrictions:
  * 1. The origin of this software must not be misrepresented; you must not claim that you wrote the original software. If you use this software in a product, an acknowledgment in the product documentation would be appreciated but is not required.
