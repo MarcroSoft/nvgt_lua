@@ -1330,6 +1330,23 @@ bool nvgt_lua_bridge_get_global(lua_State* L, nvgt_lua_bridge* b, const std::str
 	return ok;
 }
 
+// nvgt.api_names(): array of every name the nvgt table can resolve. The table itself fills lazily through __index,
+// so pairs() cannot enumerate the API; tools like luacheck use this to whitelist NVGT's globals instead.
+static int nvgt_api_names(lua_State* L) {
+	nvgt_lua_bridge* b = (nvgt_lua_bridge*)lua_touserdata(L, lua_upvalueindex(1));
+	lua_newtable(L);
+	lua_Integer n = 0;
+	auto add = [&](const std::string& s) { lua_pushlstring(L, s.data(), s.size()); lua_rawseti(L, -2, ++n); };
+	for (auto& p : b->global_funcs) {
+		add(p.first);
+		if (p.first.rfind("get_", 0) == 0 && p.first.size() > 4) add(p.first.substr(4)); // virtual property name
+	}
+	for (auto& p : b->types) add(p.first);
+	for (auto& p : b->enums) add(p.first);
+	for (auto& p : b->global_props) add(p.first);
+	return 1;
+}
+
 nvgt_lua_bridge* nvgt_lua_bridge_create(lua_State* L, asIScriptEngine* engine, bool as_globals) {
 	nvgt_lua_bridge* b = new nvgt_lua_bridge(engine);
 	lua_pushlightuserdata(L, b);
@@ -1375,6 +1392,10 @@ nvgt_lua_bridge* nvgt_lua_bridge_create(lua_State* L, asIScriptEngine* engine, b
 	lua_pushstring(L, "todict");
 	lua_pushlightuserdata(L, b);
 	lua_pushcclosure(L, nvgt_todict, 1);
+	lua_rawset(L, -3);
+	lua_pushstring(L, "api_names");
+	lua_pushlightuserdata(L, b);
+	lua_pushcclosure(L, nvgt_api_names, 1);
 	lua_rawset(L, -3);
 	if (as_globals) {
 		// Fall back to the nvgt table for unknown globals, so speak("hi") works directly. Lua's own globals win.
