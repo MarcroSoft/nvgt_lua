@@ -923,6 +923,25 @@ static int obj_gc(lua_State* L) {
 	return 0;
 }
 
+// __call: funcdef handles delivered from AngelScript via set_global are directly callable, e.g. boom(2, 3).
+// Plain script/system functions dispatch as-is; delegates unwrap into object + method (the canonical
+// asFUNC_DELEGATE pattern), so bound methods like bumper(c.bump) work too.
+static int obj_call(lua_State* L) {
+	as_object* ud = check_as_object(L, 1);
+	nvgt_lua_bridge* b = get_bridge(L);
+	if (!ud || !ud->ptr || !b) return luaL_error(L, "invalid nvgt object");
+	if (!(ud->ti->GetFlags() & asOBJ_FUNCDEF)) return luaL_error(L, "a %s object is not callable", ud->ti->GetName());
+	asIScriptFunction* f = (asIScriptFunction*)ud->ptr;
+	void* obj = nullptr;
+	if (f->GetFuncType() == asFUNC_DELEGATE) {
+		obj = f->GetDelegateObject();
+		f = f->GetDelegateFunction();
+	}
+	func_group fg;
+	fg.overloads.push_back(f);
+	return dispatch(L, b, &fg, obj, 2);
+}
+
 static int obj_tostring(lua_State* L) {
 	as_object* ud = check_as_object(L, 1);
 	if (!ud) return 0;
@@ -1173,7 +1192,6 @@ bool nvgt_lua_bridge_set_global(lua_State* L, nvgt_lua_bridge* b, const std::str
 	else if (type_id & asTYPEID_MASK_OBJECT) {
 		asITypeInfo* ti = engine->GetTypeInfoById(type_id);
 		if (!ti) { err = "unknown type"; return false; }
-		if (ti->GetFuncdefSignature()) { err = "lua globals cannot hold callbacks"; return false; }
 		if (type_id & asTYPEID_OBJHANDLE) {
 			void* obj = *(void**)ref;
 			if (!obj) lua_pushnil(L);
@@ -1322,6 +1340,7 @@ nvgt_lua_bridge* nvgt_lua_bridge_create(lua_State* L, asIScriptEngine* engine, b
 		lua_pushcfunction(L, obj_index); lua_setfield(L, -2, "__index");
 		lua_pushcfunction(L, obj_newindex); lua_setfield(L, -2, "__newindex");
 		lua_pushcfunction(L, obj_gc); lua_setfield(L, -2, "__gc");
+		lua_pushcfunction(L, obj_call); lua_setfield(L, -2, "__call");
 		lua_pushcfunction(L, obj_tostring); lua_setfield(L, -2, "__tostring");
 		lua_pushcfunction(L, obj_add); lua_setfield(L, -2, "__add");
 		lua_pushcfunction(L, obj_sub); lua_setfield(L, -2, "__sub");
