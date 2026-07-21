@@ -538,7 +538,11 @@ static int dispatch(lua_State* L, nvgt_lua_bridge* b, func_group* fg, void* this
 	bool linear_pan_get = false, linear_vol_get = false;
 	if (this_obj && !fg->overloads.empty() && is_bgt_scale_type(fg->overloads[0]->GetObjectType())) {
 		const char* fn = fg->overloads[0]->GetName();
-		if (strcmp(fn, "set_pan") == 0 && nargs >= 1 && lua_type(L, first_arg) == LUA_TNUMBER) {
+		// set_pan and the slide_pan family all take the pan target as their first argument on lua's linear
+		// -100..100 scale, so convert it to the engine's db curve exactly as set_pan does. (The trailing
+		// duration argument of the slide_pan variants is left untouched.)
+		bool pan_setter = strcmp(fn, "set_pan") == 0 || strcmp(fn, "slide_pan") == 0 || strcmp(fn, "slide_pan_in_frames") == 0 || strcmp(fn, "slide_pan_in_milliseconds") == 0;
+		if (pan_setter && nargs >= 1 && lua_type(L, first_arg) == LUA_TNUMBER) {
 			lua_pushnumber(L, lua_pan_to_db((float)lua_tonumber(L, first_arg)));
 			lua_replace(L, first_arg);
 		}
