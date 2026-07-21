@@ -291,43 +291,10 @@ struct obj_guard {
 	~obj_guard() { if (obj) engine->ReleaseScriptObject(obj, ti); }
 };
 
-// NVGT's default audio engine interprets sound/mixer pan as BGT-style db (pan_db_to_linear in src/sound.cpp), where
-// -10 already sits over two thirds of the way left. Lua carries no BGT legacy, so the bridge presents a linear
-// -100 (fully left) .. 100 (fully right) scale instead, converting to/from the db curve at this boundary only;
-// AngelScript behavior is untouched. These mirror sound.cpp's pan_db_to_linear/pan_linear_to_db exactly.
-static float lua_pan_to_db(float p) {
-	p = p < -100.0f ? -100.0f : (p > 100.0f ? 100.0f : p);
-	float m = fabsf(p) / 100.0f;
-	float db = m >= 1.0f ? 100.0f : -20.0f * log10f(1.0f - m);
-	if (db > 100.0f) db = 100.0f;
-	return p < 0 ? -db : db;
-}
-static float db_pan_to_lua(float db) {
-	db = db < -100.0f ? -100.0f : (db > 100.0f ? 100.0f : db);
-	float m = 1.0f - powf(10.0f, -fabsf(db) / 20.0f);
-	return (db < 0 ? -m : m) * 100.0f;
-}
-// Volume likewise: NVGT speaks BGT-style db volume (0 full .. -100 silent, exponential), where already -50 is
-// practically inaudible. Lua keeps the familiar -100..0 range but maps it linearly to amplitude (-50 is half
-// amplitude), converting through the db scale the engine expects.
-static float lua_vol_to_db(float v) {
-	v = v < -100.0f ? -100.0f : (v > 0.0f ? 0.0f : v);
-	float a = (v + 100.0f) / 100.0f;
-	if (a <= 0.00001f) return -100.0f;
-	float db = 20.0f * log10f(a);
-	return db < -100.0f ? -100.0f : db;
-}
-static float db_vol_to_lua(float db) {
-	float a = powf(10.0f, db / 20.0f);
-	if (a > 1.0f) a = 1.0f;
-	return a * 100.0f - 100.0f;
-}
-// The types whose pan/volume speak BGT db on the default engine (PERCENTAGE_ATTRIBUTES in src/sound.cpp).
-static bool is_bgt_scale_type(asITypeInfo* ti) {
-	if (!ti) return false;
-	const char* n = ti->GetName();
-	return strcmp(n, "sound") == 0 || strcmp(n, "mixer") == 0;
-}
+// Pan and volume are passed through to the engine exactly as given, matching AngelScript. On the default engine
+// (PERCENTAGE_ATTRIBUTES) that means BGT-style db; callers who want to work in raw linear values can convert with
+// the pan_linear_to_db / pan_db_to_linear / volume_linear_to_db / volume_db_to_linear global functions (registered
+// in src/sound.cpp), which the bridge exposes like any other NVGT function.
 
 static bool lua_to_array(lua_State* L, nvgt_lua_bridge* b, int idx, asITypeInfo* ti, void** out, asITypeInfo** used_ti = nullptr, std::string* err = nullptr);
 static bool lua_to_dict(lua_State* L, nvgt_lua_bridge* b, int idx, void** out);
@@ -533,26 +500,6 @@ static void push_as_value(lua_State* L, nvgt_lua_bridge* b, void* addr, int tid)
 static int dispatch(lua_State* L, nvgt_lua_bridge* b, func_group* fg, void* this_obj, int first_arg) {
 	int nargs = lua_gettop(L) - first_arg + 1;
 	if (nargs < 0) nargs = 0;
-	// Pan and volume cross between lua's linear scales and the engine's db scales here; dispatch covers both the
-	// snd.pan property syntax and snd:set_pan() method calls.
-	bool linear_pan_get = false, linear_vol_get = false;
-	if (this_obj && !fg->overloads.empty() && is_bgt_scale_type(fg->overloads[0]->GetObjectType())) {
-		const char* fn = fg->overloads[0]->GetName();
-		// set_pan and the slide_pan family all take the pan target as their first argument on lua's linear
-		// -100..100 scale, so convert it to the engine's db curve exactly as set_pan does. (The trailing
-		// duration argument of the slide_pan variants is left untouched.)
-		bool pan_setter = strcmp(fn, "set_pan") == 0 || strcmp(fn, "slide_pan") == 0 || strcmp(fn, "slide_pan_in_frames") == 0 || strcmp(fn, "slide_pan_in_milliseconds") == 0;
-		if (pan_setter && nargs >= 1 && lua_type(L, first_arg) == LUA_TNUMBER) {
-			lua_pushnumber(L, lua_pan_to_db((float)lua_tonumber(L, first_arg)));
-			lua_replace(L, first_arg);
-		}
-		else if (strcmp(fn, "get_pan") == 0) linear_pan_get = true;
-		else if (strcmp(fn, "set_volume") == 0 && nargs >= 1 && lua_type(L, first_arg) == LUA_TNUMBER) {
-			lua_pushnumber(L, lua_vol_to_db((float)lua_tonumber(L, first_arg)));
-			lua_replace(L, first_arg);
-		}
-		else if (strcmp(fn, "get_volume") == 0) linear_vol_get = true;
-	}
 	asIScriptFunction* best = nullptr;
 	int best_score = -1;
 	for (asIScriptFunction* f : fg->overloads) {
@@ -595,11 +542,6 @@ static int dispatch(lua_State* L, nvgt_lua_bridge* b, func_group* fg, void* this
 		return luaL_error(L, "%s", msg.c_str());
 	}
 	int nres = push_context_results(L, b, ctx, best, scratch);
-	if ((linear_pan_get || linear_vol_get) && nres >= 1 && lua_type(L, -1) == LUA_TNUMBER) {
-		float converted = linear_pan_get ? db_pan_to_lua((float)lua_tonumber(L, -1)) : db_vol_to_lua((float)lua_tonumber(L, -1));
-		lua_pushnumber(L, converted);
-		lua_replace(L, -2);
-	}
 	return nres;
 }
 
