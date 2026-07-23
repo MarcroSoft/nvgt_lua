@@ -65,6 +65,6 @@ The plugin is developed and distributed independently of NVGT, but builds inside
 scons plugins=lua release/lib/lua.dll
 ```
 
-replacing the target with `release/lib/liblua.so` on Linux or `release/lib/liblua.dylib` on macOS. Building all of NVGT with a plain `scons` also builds the plugin. The .github/workflows/build.yml workflow in this repository does exactly this for all three platforms.
+replacing the target with `release/lib/liblua.so` on Linux or `release/lib/liblua.dylib` on macOS. For Android, set `ANDROID_NDK_HOME` and run `scons target=android plugins=lua release/lib_android/lua.so`; for iOS (which cannot load shared plugins) build the static library into the stubs with `scons target=ios plugins=lua static_lua_plugin=1`. Building all of NVGT with a plain `scons` also builds the plugin when it is present at plugin/lua. The .github/workflows/build.yml workflow in this repository builds the shared plugin for Windows, Linux, macOS and Android.
 
 The Lua 5.5 sources are vendored under lua55 and compiled into the plugin as a single C++ translation unit (lua55.cpp), so lua errors unwind safely through the bridge with C++ exceptions and no external dependency is needed. Lua is distributed under the MIT license, see license.md.

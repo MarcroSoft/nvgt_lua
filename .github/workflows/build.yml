@@ -36,12 +36,26 @@ jobs:
             devlibs: macosdev
             target: release/lib/liblua.dylib
             scons_install: pip3 install scons --break-system-packages
+          - name: android
+            os: ubuntu-22.04
+            devlibs: droidev
+            target: release/lib_android/lua.so
+            scons_install: pip3 install scons
+            scons_args: target=android
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
         with:
           path: plugin-src
+      - uses: nttld/setup-ndk@v1
+        if: matrix.name == 'android'
+        id: setup-ndk
+        with:
+          ndk-version: r27
+      - name: set ndk environ
+        if: matrix.name == 'android'
+        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
       - name: fetch nvgt
         shell: bash
         run: |
@@ -56,7 +70,7 @@ jobs:
         run: ${{ matrix.scons_install }}
       - name: build
         working-directory: nvgt
-        run: scons -s plugins=lua ${{ matrix.target }}
+        run: scons -s plugins=lua ${{ matrix.scons_args }} ${{ matrix.target }}
       - uses: actions/upload-artifact@v7
         with:
           name: lua_${{ matrix.name }}
