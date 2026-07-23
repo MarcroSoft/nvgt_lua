@@ -59,7 +59,7 @@ Note that only what is registered with the engine itself is visible. Functions a
 * Reading dictionary values from Lua requires going through functions that return concrete types; `nvgt.totable` only accepts arrays.
 
 ## building
-The plugin builds as part of NVGT's build system. Place a checkout of this repository at `plugin/lua` inside the [NVGT source tree](https://github.com/MarcroSoft/nvgt) (the NVGT repository includes it there as a git submodule), then from the NVGT root run:
+The plugin is developed and distributed independently of NVGT, but builds inside NVGT's build system. Clone this repository to `plugin/lua` inside a checkout of the [NVGT source tree](https://github.com/MarcroSoft/nvgt), then from the NVGT root run:
 
 ```bash
 scons plugins=lua release/lib/lua.dll
