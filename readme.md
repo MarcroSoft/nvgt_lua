@@ -59,4 +59,12 @@ Note that only what is registered with the engine itself is visible. Functions a
 * Reading dictionary values from Lua requires going through functions that return concrete types; `nvgt.totable` only accepts arrays.
 
 ## building
-The Lua 5.5 sources are vendored under lua55 and compiled into the plugin as a single C++ translation unit (lua55.cpp), so lua errors unwind safely through the bridge with C++ exceptions and no external dependency is needed. Lua is distributed under the MIT license, see doc/OSL/MIT/lua.txt.
+The plugin builds as part of NVGT's build system. Place a checkout of this repository at `plugin/lua` inside the [NVGT source tree](https://github.com/MarcroSoft/nvgt) (the NVGT repository includes it there as a git submodule), then from the NVGT root run:
+
+```bash
+scons plugins=lua release/lib/lua.dll
+```
+
+replacing the target with `release/lib/liblua.so` on Linux or `release/lib/liblua.dylib` on macOS. Building all of NVGT with a plain `scons` also builds the plugin. The .github/workflows/build.yml workflow in this repository does exactly this for all three platforms.
+
+The Lua 5.5 sources are vendored under lua55 and compiled into the plugin as a single C++ translation unit (lua55.cpp), so lua errors unwind safely through the bridge with C++ exceptions and no external dependency is needed. Lua is distributed under the MIT license, see license.md.

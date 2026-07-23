@@ -1,0 +1,63 @@
+name: build
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# The plugin builds inside NVGT's own build system: NVGT is cloned, this repository is placed at plugin/lua where the
+# SConstruct picks it up, and only the shared plugin target is requested. NVGT's build downloads its prebuilt
+# dependency package (windev/lindev/macosdev) from nvgt.dev automatically; only the headers from it are needed here.
+env:
+  NVGT_REPO: https://github.com/MarcroSoft/nvgt
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+            devlibs: windev
+            target: release/lib/lua.dll
+            scons_install: pip3 install scons
+          - name: linux
+            os: ubuntu-22.04
+            devlibs: lindev
+            target: release/lib/liblua.so
+            scons_install: pip3 install scons
+          - name: macos
+            os: macos-14
+            devlibs: macosdev
+            target: release/lib/liblua.dylib
+            scons_install: pip3 install scons --break-system-packages
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin-src
+      - name: fetch nvgt
+        shell: bash
+        run: |
+          git clone --depth 1 "$NVGT_REPO" nvgt
+          cp -r plugin-src nvgt/plugin/lua
+          rm -rf nvgt/plugin/lua/.git
+      - uses: actions/cache@v4
+        with:
+          path: nvgt/${{ matrix.devlibs }}
+          key: ${{ matrix.devlibs }}-devlibs
+      - name: install scons
+        run: ${{ matrix.scons_install }}
+      - name: build
+        working-directory: nvgt
+        run: scons -s plugins=lua ${{ matrix.target }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lua_${{ matrix.name }}
+          path: nvgt/${{ matrix.target }}
