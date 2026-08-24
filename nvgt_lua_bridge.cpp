@@ -754,21 +754,6 @@ static bool write_field(lua_State* L, nvgt_lua_bridge* b, as_object* ud, asUINT 
 	return write_value_at(L, b, (char*)ud->ptr + offset, tid, value_idx);
 }
 
-// Call a zero-argument integer-returning method (array's length) outside the dispatch machinery.
-static bool call_length_method(nvgt_lua_bridge* b, as_object* ud, func_group* fg, lua_Integer& out) {
-	if (fg->overloads.empty()) return false;
-	asIScriptFunction* f = fg->overloads[0];
-	if (f->GetParamCount() != 0) return false;
-	asIScriptContext* ctx = b->engine->RequestContext();
-	if (!ctx) return false;
-	ctx_guard guard{b->engine, ctx};
-	if (ctx->Prepare(f) < 0) return false;
-	ctx->SetObject(ud->ptr);
-	if (ctx->Execute() != asEXECUTION_FINISHED) return false;
-	out = (lua_Integer)ctx->GetReturnDWord();
-	return true;
-}
-
 // __index for nvgt objects: methods, get_X property accessors, direct fields, numeric opIndex.
 static int obj_index(lua_State* L) {
 	as_object* ud = check_as_object(L, 1);
@@ -778,20 +763,7 @@ static int obj_index(lua_State* L) {
 	if (lua_type(L, 2) == LUA_TNUMBER) {
 		auto it = tc.methods.find("opIndex");
 		if (it == tc.methods.end()) return luaL_error(L, "%s does not support indexing", ud->ti->GetName());
-		// The Lua side is 1-based while AngelScript containers are 0-based, so integer keys are shifted here (and in obj_newindex). Arrays also yield nil out of range so ipairs and the t[i] == nil idiom behave like native tables.
-		if (lua_isinteger(L, 2)) {
-			lua_Integer idx = lua_tointeger(L, 2);
-			if (strcmp(ud->ti->GetName(), "array") == 0) {
-				auto len_it = tc.methods.find("length");
-				lua_Integer len;
-				if (len_it != tc.methods.end() && call_length_method(b, ud, &len_it->second, len) && (idx < 1 || idx > len)) {
-					lua_pushnil(L);
-					return 1;
-				}
-			}
-			lua_pushinteger(L, idx - 1);
-			lua_replace(L, 2);
-		}
+		// Indices go to opIndex untouched: wrapped containers count from 0 on the Lua side just as they do in AngelScript, and just as the methods that take or return an index (insert_at, remove_at, find) always have. An index out of range raises the container's own exception rather than reading back nil.
 		return dispatch(L, b, &it->second, ud->ptr, 2);
 	}
 	const char* key = luaL_checkstring(L, 2);
@@ -820,7 +792,7 @@ static int obj_newindex(lua_State* L) {
 	if (!ud || !b) return luaL_error(L, "invalid nvgt object");
 	type_cache& tc = b->get_type_cache(ud->ti);
 	if (lua_type(L, 2) == LUA_TNUMBER && lua_isinteger(L, 2)) {
-		// t[i] = v: run opIndex(i-1) and write the value through the returned element reference. Assigning out of range raises the container's own exception; unlike Lua tables, AngelScript arrays don't grow on assignment.
+		// t[i] = v: run opIndex(i) and write the value through the returned element reference. Assigning out of range raises the container's own exception; unlike Lua tables, AngelScript arrays don't grow on assignment.
 		auto it = tc.methods.find("opIndex");
 		if (it == tc.methods.end()) return luaL_error(L, "%s does not support numeric assignment", ud->ti->GetName());
 		asIScriptFunction* f = nullptr;
@@ -839,7 +811,7 @@ static int obj_newindex(lua_State* L) {
 		ctx->SetObject(ud->ptr);
 		int ptid = 0;
 		f->GetParam(0, &ptid);
-		lua_Integer idx = lua_tointeger(L, 2) - 1; // the Lua side is 1-based
+		lua_Integer idx = lua_tointeger(L, 2);
 		if (ptid == asTYPEID_INT64 || ptid == asTYPEID_UINT64) ctx->SetArgQWord(0, (asQWORD)idx);
 		else ctx->SetArgDWord(0, (asDWORD)idx);
 		int r = ctx->Execute();
