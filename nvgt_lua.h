@@ -42,7 +42,8 @@ public:
 	bool exec(const std::string& code, const std::string& chunkname);
 	bool exec_file(const std::string& filename);
 	// Makes exec_file, require, loadfile and dofile read from this pack_file before the disk; null switches back to disk only. Requires open_libraries and expose_nvgt.
-	bool set_pack(void* pack);
+	// Takes ?&in (ref/type_id) so the declaration doesn't name pack_file, which compiled games register only after plugins.
+	bool set_pack(void* ref, int type_id);
 	bool call(const std::string& function_name);
 	std::string get_last_error() const { return last_error; }
 	int get_last_error_code() const { return last_error_code; }

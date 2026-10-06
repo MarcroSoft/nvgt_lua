@@ -147,10 +147,21 @@ end)
 return pack_loadfile
 )LUA";
 
-bool lua_state::set_pack(void* pack) {
+// The parameter is a variable type (?&in) rather than pack_file@: compiled games load plugins before
+// NVGT registers its own API, so naming pack_file in the declaration would fail to register there.
+// A pack_file object or handle is accepted, and null switches back to the disk.
+bool lua_state::set_pack(void* ref, int type_id) {
 	if (!L) return false;
 	last_error = "";
 	last_error_code = LUA_OK;
+	bool clear = !ref || type_id == asTYPEID_VOID || ((type_id & asTYPEID_OBJHANDLE) && !*(void**)ref);
+	if (!clear) {
+		asITypeInfo* ti = (type_id & asTYPEID_MASK_OBJECT) ? engine->GetTypeInfoById(type_id) : nullptr;
+		if (!ti || strcmp(ti->GetName(), "pack_file") != 0) {
+			last_error = "set_pack expects a pack_file";
+			return false;
+		}
+	}
 	if (!bridge) {
 		last_error = "expose_nvgt must be called before set_pack";
 		return false;
@@ -174,10 +185,14 @@ bool lua_state::set_pack(void* pack) {
 		}
 		pack_loadfile_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 	}
-	// Marshal the handle through the bridge into a temporary global, then move it to package.pack.
-	if (!nvgt_lua_bridge_set_global(L, bridge, "__nvgt_pack", &pack, engine->GetTypeIdByDecl("pack_file@"), last_error)) return false;
+	// Marshal the pack through the bridge into a temporary global, then move it to package.pack.
+	if (clear) lua_pushnil(L);
+	else {
+		if (!nvgt_lua_bridge_set_global(L, bridge, "__nvgt_pack", ref, type_id, last_error)) return false;
+		lua_getglobal(L, "__nvgt_pack");
+	}
 	lua_getglobal(L, "package");
-	lua_getglobal(L, "__nvgt_pack");
+	lua_insert(L, -2);
 	lua_setfield(L, -2, "pack");
 	lua_pop(L, 1);
 	lua_pushnil(L);
@@ -299,7 +314,7 @@ plugin_main(nvgt_plugin_shared* shared) {
 	engine->RegisterObjectMethod("lua_state", "bool exec(const string&in code, const string&in chunkname = \"\")", asMETHOD(lua_state, exec), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "bool exec_file(const string&in filename)", asMETHOD(lua_state, exec_file), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "bool call(const string&in function_name)", asMETHOD(lua_state, call), asCALL_THISCALL);
-	engine->RegisterObjectMethod("lua_state", "bool set_pack(pack_file@+ pack)", asMETHOD(lua_state, set_pack), asCALL_THISCALL);
+	engine->RegisterObjectMethod("lua_state", "bool set_pack(const ?&in pack)", asMETHOD(lua_state, set_pack), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "string get_last_error() const property", asMETHOD(lua_state, get_last_error), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "lua_status get_last_error_code() const property", asMETHOD(lua_state, get_last_error_code), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "void set_global_number(const string&in name, double value)", asMETHOD(lua_state, set_global_number), asCALL_THISCALL);
