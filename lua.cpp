@@ -14,6 +14,7 @@
 
 #include "../../src/nvgt_plugin.h"
 #include "nvgt_lua.h"
+#include <cstring>
 
 static asIScriptEngine* g_plugin_engine = nullptr;
 
@@ -68,7 +69,21 @@ bool lua_state::exec_file(const std::string& filename) {
 	if (!L) return false;
 	last_error = "";
 	last_error_code = LUA_OK;
-	int r = luaL_loadfile(L, filename.c_str());
+	int r;
+	if (pack_loadfile_ref != LUA_NOREF) {
+		// Load through the pack-aware loadfile installed by set_pack, which falls back to the disk.
+		lua_rawgeti(L, LUA_REGISTRYINDEX, pack_loadfile_ref);
+		lua_pushlstring(L, filename.data(), filename.size());
+		r = lua_pcall(L, 1, 2, 0);
+		if (r == LUA_OK) {
+			if (lua_isfunction(L, -2)) lua_pop(L, 1);
+			else {
+				const char* msg = lua_tostring(L, -1);
+				r = msg && strncmp(msg, "cannot open", 11) == 0 ? LUA_ERRFILE : LUA_ERRSYNTAX;
+				lua_remove(L, -2);
+			}
+		}
+	} else r = luaL_loadfile(L, filename.c_str());
 	if (r == LUA_OK) r = lua_pcall(L, 0, 0, 0);
 	if (r != LUA_OK) {
 		const char* msg = lua_tostring(L, -1);
@@ -77,6 +92,96 @@ bool lua_state::exec_file(const std::string& filename) {
 		lua_pop(L, 1);
 		return false;
 	}
+	return true;
+}
+
+// Installed once per lua_state by the first set_pack. Everything consults package.pack at call time, so later
+// set_pack calls only swap that field. Returns the pack-aware loadfile, which exec_file uses as well.
+static const char* pack_hooks_lua = R"LUA(
+local package, load, loadfile_disk, select, error, concat = package, load, loadfile, select, error, table.concat
+local function normalize(name)
+	name = name:gsub("\\", "/"):gsub("//+", "/")
+	while name:sub(1, 2) == "./" do name = name:sub(3) end
+	return name
+end
+local function read(name)
+	local pack = package.pack
+	if not pack then return nil end
+	name = normalize(name)
+	if not pack:file_exists(name) then return nil end
+	return pack:get_file(name):read(), name
+end
+local function pack_loadfile(filename, mode, ...)
+	if filename ~= nil then
+		local src, name = read(filename)
+		if src then
+			-- an explicit nil env would count as given, so only pass env through when the caller did
+			if select("#", ...) > 0 then return load(src, "@" .. name, mode or "bt", (...)) end
+			return load(src, "@" .. name, mode or "bt")
+		end
+	end
+	return loadfile_disk(filename, mode, ...)
+end
+loadfile = pack_loadfile
+function dofile(filename)
+	local f, err = pack_loadfile(filename)
+	if not f then error(err, 2) end
+	return f()
+end
+-- searched right after package.preload, so a module in the pack wins over one on disk
+table.insert(package.searchers, 2, function(modname)
+	if not package.pack then return nil end
+	local base = modname:gsub("%.", "/")
+	local tried = {}
+	for template in package.path:gmatch("[^;]+") do
+		local src, name = read((template:gsub("%?", base)))
+		if src then
+			local f, err = load(src, "@" .. name)
+			if not f then error(("error loading module '%s' from pack file '%s':\n\t%s"):format(modname, name, err), 2) end
+			return f, name
+		end
+		tried[#tried + 1] = "no file '" .. normalize((template:gsub("%?", base))) .. "' in pack"
+	end
+	return concat(tried, "\n\t")
+end)
+return pack_loadfile
+)LUA";
+
+bool lua_state::set_pack(void* pack) {
+	if (!L) return false;
+	last_error = "";
+	last_error_code = LUA_OK;
+	if (!bridge) {
+		last_error = "expose_nvgt must be called before set_pack";
+		return false;
+	}
+	lua_getglobal(L, "package");
+	bool have_package = lua_istable(L, -1);
+	lua_pop(L, 1);
+	if (!have_package) {
+		last_error = "open_libraries must be called before set_pack";
+		return false;
+	}
+	if (pack_loadfile_ref == LUA_NOREF) {
+		int r = luaL_loadbuffer(L, pack_hooks_lua, strlen(pack_hooks_lua), "=nvgt_pack");
+		if (r == LUA_OK) r = lua_pcall(L, 0, 1, 0);
+		if (r != LUA_OK) {
+			const char* msg = lua_tostring(L, -1);
+			last_error = msg ? msg : "unknown lua error";
+			last_error_code = r;
+			lua_pop(L, 1);
+			return false;
+		}
+		pack_loadfile_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+	}
+	// Marshal the handle through the bridge into a temporary global, then move it to package.pack.
+	if (!nvgt_lua_bridge_set_global(L, bridge, "__nvgt_pack", &pack, engine->GetTypeIdByDecl("pack_file@"), last_error)) return false;
+	lua_getglobal(L, "package");
+	lua_getglobal(L, "__nvgt_pack");
+	lua_setfield(L, -2, "pack");
+	lua_pop(L, 1);
+	lua_pushnil(L);
+	lua_setglobal(L, "__nvgt_pack");
 	return true;
 }
 
@@ -194,6 +299,7 @@ plugin_main(nvgt_plugin_shared* shared) {
 	engine->RegisterObjectMethod("lua_state", "bool exec(const string&in code, const string&in chunkname = \"\")", asMETHOD(lua_state, exec), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "bool exec_file(const string&in filename)", asMETHOD(lua_state, exec_file), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "bool call(const string&in function_name)", asMETHOD(lua_state, call), asCALL_THISCALL);
+	engine->RegisterObjectMethod("lua_state", "bool set_pack(pack_file@+ pack)", asMETHOD(lua_state, set_pack), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "string get_last_error() const property", asMETHOD(lua_state, get_last_error), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "lua_status get_last_error_code() const property", asMETHOD(lua_state, get_last_error_code), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "void set_global_number(const string&in name, double value)", asMETHOD(lua_state, set_global_number), asCALL_THISCALL);

@@ -32,6 +32,7 @@ public:
 	nvgt_lua_bridge* bridge; // Created by expose_nvgt, owned by this object.
 	std::string last_error;
 	int last_error_code = LUA_OK; // Lua status of the last failed exec/exec_file/call: LUA_ERRSYNTAX means the code never ran, LUA_ERRRUN that it failed while running.
+	int pack_loadfile_ref = LUA_NOREF; // The pack-aware loadfile installed by the first set_pack, used by exec_file.
 	lua_state(asIScriptEngine* engine);
 	~lua_state();
 	void add_ref();
@@ -40,6 +41,8 @@ public:
 	void expose_nvgt(bool as_globals);
 	bool exec(const std::string& code, const std::string& chunkname);
 	bool exec_file(const std::string& filename);
+	// Makes exec_file, require, loadfile and dofile read from this pack_file before the disk; null switches back to disk only. Requires open_libraries and expose_nvgt.
+	bool set_pack(void* pack);
 	bool call(const std::string& function_name);
 	std::string get_last_error() const { return last_error; }
 	int get_last_error_code() const { return last_error_code; }

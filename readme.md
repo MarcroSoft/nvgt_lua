@@ -33,6 +33,15 @@ Note that only what is registered with the engine itself is visible. Functions a
 * `bool exec(const string&in code, const string&in chunkname = "")`: run a string of Lua code.
 * `bool exec_file(const string&in filename)`: run a Lua file (path is relative to the working directory).
 * `bool call(const string&in function_name)`: call a global Lua function without arguments.
+* `bool set_pack(pack_file@ pack)`: load Lua code from an NVGT pack. Afterwards `exec_file`, `require`, `loadfile` and `dofile` look in the pack first and fall back to the disk, so a game can ship its Lua sources (or precompiled chunks) inside a pack — including one embedded with `#pragma embed`. `require` resolves modules through `package.path` as usual, with paths taken relative to the pack root. The pack is also available to Lua as `package.pack`, so game code can call `package.pack:file_exists(name)`, `list_files()` or `get_file(name):read()` for its own data. Pass null to go back to loading from the disk only. Requires `open_libraries` and `expose_nvgt`. Only Lua loading is affected: `io.open` still reads the disk, and sounds come from the pack only if you also set `sound_default_pack`.
+
+```angelscript
+pack_file game_data;
+game_data.open("game.dat"); // or game_data.open("*") with #pragma embed game.dat
+sound_default_pack = game_data;
+L.set_pack(game_data);
+L.exec_file("main.lua");
+```
 * `string last_error`: message of the last failed exec/exec_file/call.
 * `lua_status last_error_code`: Lua status of the last failed exec/exec_file/call — LUA_OK, LUA_ERRRUN, LUA_ERRSYNTAX, LUA_ERRMEM, LUA_ERRERR or LUA_ERRFILE. A syntax or file error means the code never started running; a runtime error means it failed partway through, so globals may have been modified. call reports a missing function as LUA_ERRRUN.
 * `set_global_number/set_global_string/set_global_bool(const string&in name, value)`: set a Lua global.
