@@ -10,8 +10,19 @@ if env["NVGT_TARGET"] == "ios":
 	env = env.Clone()
 	env.Append(CPPDEFINES = ["LUA_USE_IOS"])
 
+# Whether NVGT links this plugin into nvgt and its stubs, through static_lua_plugin=1 or a "lua" line in
+# user/static_plugins (the two ways SConstruct accepts). A shared lua library would then go unused, yet still be
+# bundled into every game that uses the plugin, so it is not built at all.
+def linked_statically():
+	if ARGUMENTS.get("static_lua_plugin", "0") == "1": return True
+	try:
+		with open(File("#user/static_plugins").abspath) as f:
+			return "lua" in [l.strip() for l in f if not l.startswith("#")]
+	except OSError:
+		return False
+
 # iOS distribution cannot load shared library plugins; only the static lib is useful there.
-if ARGUMENTS.get("no_shared_plugins", "0") == "0" and env["NVGT_TARGET"] != "ios":
+if ARGUMENTS.get("no_shared_plugins", "0") == "0" and env["NVGT_TARGET"] != "ios" and not linked_statically():
 	# The shared plugin is compiled for size; the reflection bridge dispatches through script contexts anyway so raw
 	# interpreter speed is rarely the bottleneck, and a small dll matters more for game distribution.
 	size_env = env.Clone()
