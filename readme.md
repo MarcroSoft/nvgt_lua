@@ -52,23 +52,30 @@ L.exec_file("main.lua");
 
 ## conversions and helpers
 * Numbers, strings, booleans and enums convert automatically in both directions; enum constants are available by name, e.g. `nvgt.KEY_RETURN`.
-* Wrapped NVGT containers are 0-based from Lua, as they are in AngelScript: `arr[0]` is the first element, and `for i = 0, #arr - 1 do` walks the whole thing. This keeps `[]` agreeing with the methods and functions that take or return an index — `insert_at`, `remove_at`, `find`, `sound_output_device`, `tts_voice:set_voice` — all of which count from 0 and are handed through unchanged. Out of range raises the container's own exception rather than reading back `nil`, so `ipairs` does not walk an NVGT array; convert with `nvgt.totable(arr)` first if you want a plain 1-based Lua table. A negative index counts from the end, as NVGT's array itself does — `arr[-1]` is the last element, not an error. `arr[i] = v` assigns through the element reference (primitives, enums and strings); NVGT arrays don't grow on assignment, use `arr.insert_last(v)`.
+* Wrapped NVGT containers are 0-based from Lua, as they are in AngelScript: `arr[0]` is the first element, and `for i = 0, #arr - 1 do` walks the whole thing. This keeps `[]` agreeing with the methods and functions that take or return an index — `insert_at`, `remove_at`, `find`, `sound_output_device`, `tts_voice:set_voice` — all of which count from 0 and are handed through unchanged. Out of range raises the container's own exception rather than reading back `nil`, so `ipairs` raises on an NVGT array rather than walking it; convert with `nvgt.totable(arr)` first if you want a plain 1-based Lua table. A negative index counts from the end, as NVGT's array itself does — `arr[-1]` is the last element, not an error. `arr[i] = v` assigns through the element reference (primitives, enums and strings); NVGT arrays don't grow on assignment, use `arr.insert_last(v)`.
 * NVGT objects appear in Lua as userdata: call methods with `:`, access properties and fields with `.`, index with `[]` (0-based, like AngelScript), and use `#`, `+`, `-`, `*`, `/`, `%`, unary minus and comparisons where the type implements the matching AngelScript operator methods.
 * Construct objects by calling the type: `nvgt.sound()`, `nvgt.vector(1, 2, 3)`.
 * `nvgt.toarray(table, "int")` converts a Lua sequence to an NVGT array (element type deduced from the first element when omitted); `nvgt.totable(array)` converts back; `nvgt.todict(table)` builds a dictionary from a string-keyed table. Plain Lua tables are also converted automatically when passed where a function expects an array or dictionary.
+* Global properties that NVGT implements as accessors read and write by name, as in AngelScript: `DIRECTORY_TEMP`, `sound_output_device`, `MOUSE_X`. Assign through the nvgt table (`nvgt.sound_output_device = 1`), since assigning a bare global creates a Lua variable instead.
 * `nvgt.api_names()` returns an array of every name the bridge can resolve (functions, types, enum constants and global properties). The nvgt table fills lazily so pairs() cannot enumerate it; use this to whitelist NVGT's API in tools like luacheck.
 * Functions with trailing `&out` parameters return those as extra Lua return values.
 * Sound and mixer `pan` and `volume` behave exactly as they do in AngelScript, with no scale translation: on the default engine (which sets `PERCENTAGE_ATTRIBUTES`) both are BGT-style db. If you would rather work in raw linear values, convert explicitly with the `pan_linear_to_db` / `pan_db_to_linear` and `volume_linear_to_db` / `volume_db_to_linear` global functions, e.g. `snd.pan = pan_linear_to_db(0.5)` to place a sound halfway to the right, or `local amp = volume_db_to_linear(snd.volume)`.
 * Objects cross the boundary in both directions through `set_global`/`get_global`: a sound created in Lua can be fetched into a `sound@` in AngelScript and vice versa, with both sides holding references to the same object.
 
 ## running Oidua code
-[Oidua](https://github.com/MarcroSoft/Oidua) is another Lua audio game engine, and code written for it mostly runs here unchanged — it is Lua, and the NVGT functions it leans on are the same ones. The exception is Oidua's two BGT container objects, `array` and `dictionary`. NVGT has types by those names, but they are AngelScript templates that need a subtype, so `array()` fails outright rather than behaving differently. `compat/oidua.lua` reimplements both in plain Lua; copy it next to your game's sources and start with:
+[Oidua](https://github.com/MarcroSoft/Oidua) is another Lua audio game engine. Its API is BGT's, which NVGT renamed in many places, so Oidua code does not run here as it stands. `compat/oidua.lua` closes as much of that gap as can be closed from Lua; copy it next to your game's sources and start with:
 
 ```lua
 require("oidua").install()
 ```
 
-Oidua's own `tests/colltest.ois` passes against it, bar two checks that assert the containers are userdata. Indices that Oidua counts from 1 — sound devices, TTS voices, pathfinder coordinates — still count from 0 here, as they do everywhere else in NVGT.
+That gives Oidua's `array` and `dictionary` (reimplemented in plain Lua, since NVGT's are typed AngelScript templates), BGT's names for functions and constants NVGT renamed (`show_game_window`, `clipboard_copy_text`, `screen_reader_name`, `string_hash`, `KEY_LCONTROL`, `KEY_NUMPAD0`, `EVENT_RECEIVE`, `MOUSE_LEFT`, `DIRECTORY_MY_DOCUMENTS` and so on), and Oidua's arguments and return values where they differ: lists from `find_files`, `keys_pressed` and friends come back as Lua tables counting from 1, sound devices count from 1, `screen_reader_speak` queues unless told to interrupt, and `run` and `vector` take Oidua's shorter argument lists.
+
+What it cannot cover:
+* Methods on NVGT objects keep NVGT's signatures and conventions: `network:connect` takes no channel count, `tone_synth:freq` takes one number rather than a list, `get_voice_names` and `get_peer_list` return 0-based arrays, `calendar:set` raises on an invalid date, and a `sound` or `file` with nothing open reads back `nan` or raises rather than Oidua's defaults.
+* The key constants carry NVGT's (SDL's) numbers, not BGT's, so key codes saved by one engine mean other keys in the other.
+* Oidua's `settings` and `instance` objects, its key hook and its callbacks (`pathfinder:set_callback_function`) have no counterpart here.
+* Pack files, encryption and `string_compress` produce different bytes in the two engines.
 
 ## limitations
 * Lua functions cannot yet be passed where NVGT expects a callback (funcdef); such parameters are rejected with a clear error.

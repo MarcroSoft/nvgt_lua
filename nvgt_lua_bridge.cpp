@@ -1014,6 +1014,15 @@ static int nvgt_index(lua_State* L) {
 		lua_pushnil(L);
 		return 1;
 	}
+	// Virtual global properties such as DIRECTORY_TEMP or sound_master_volume are get_X accessors. Not cached: the value can change.
+	auto git = b->global_funcs.find(std::string("get_") + key);
+	if (git != b->global_funcs.end()) {
+		for (asIScriptFunction* f : git->second.overloads) {
+			if (f->GetParamCount() != 0) continue;
+			lua_settop(L, 2);
+			return dispatch(L, b, &git->second, nullptr, 3);
+		}
+	}
 	lua_pushnil(L);
 	return 1;
 }
@@ -1022,6 +1031,13 @@ static int nvgt_newindex(lua_State* L) {
 	nvgt_lua_bridge* b = (nvgt_lua_bridge*)lua_touserdata(L, lua_upvalueindex(1));
 	const char* key = luaL_checkstring(L, 2);
 	auto pit = b->global_props.find(key);
+	if (pit == b->global_props.end()) {
+		auto sit = b->global_funcs.find(std::string("set_") + key);
+		if (sit != b->global_funcs.end()) {
+			dispatch(L, b, &sit->second, nullptr, 3);
+			return 0;
+		}
+	}
 	if (pit == b->global_props.end() || pit->second.is_const) return luaL_error(L, "cannot assign '%s'; only writable nvgt global properties may be assigned", key);
 	global_prop& gp = pit->second;
 	void* addr = gp.address;
