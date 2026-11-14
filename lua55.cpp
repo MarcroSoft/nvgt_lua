@@ -6,6 +6,13 @@
 #define LUA_CORE
 #define LUA_LIB
 
+// Replace luaconf.h's stock search paths, which probe machine-wide Lua installs relative to the host executable
+// (!\lua\, !\..\share\lua\5.5\, /usr/local/share/lua/5.5/ and so on) and would otherwise end up as string literals
+// in nvgt and every compiled game. Keep these in sync with what lua_state::open_libraries assigns in lua.cpp, which
+// still sets package.path explicitly so LUA_PATH environment variables can't widen the search either.
+#define LUA_PATH_DEFAULT "./?.lua;./?.ois;./?/init.lua;./?/init.ois"
+#define LUA_CPATH_DEFAULT ""
+
 #include "lua55/lprefix.h"
 
 // core
