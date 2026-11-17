@@ -15,6 +15,9 @@
 #include "../../src/nvgt_plugin.h"
 #include "nvgt_lua.h"
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 
 static asIScriptEngine* g_plugin_engine = nullptr;
 
@@ -32,6 +35,22 @@ void lua_state::release() {
 	if (asAtomicDec(refcount) < 1) delete this;
 }
 
+// Run protected from open_libraries.
+static int restrict_package_search(lua_State* L) {
+	if (lua_getglobal(L, "package") != LUA_TTABLE) return 0;
+	lua_pushliteral(L, "./?.lua;./?.ois;./?/init.lua;./?/init.ois");
+	lua_setfield(L, -2, "path");
+	lua_pushliteral(L, "");
+	lua_setfield(L, -2, "cpath");
+	if (lua_getfield(L, -1, "searchers") == LUA_TTABLE) {
+		lua_pushnil(L);
+		lua_seti(L, -2, 4);
+		lua_pushnil(L);
+		lua_seti(L, -2, 3);
+	}
+	return 0;
+}
+
 void lua_state::open_libraries() {
 	if (!L) return;
 	luaL_openlibs(L);
@@ -41,7 +60,9 @@ void lua_state::open_libraries() {
 	// against a standalone Lua would not be ABI compatible with the interpreter embedded here anyway.
 	// .ois files are searched as well as .lua ones so that games can ship their Lua modules under an
 	// extension of their own; they are loaded as ordinary Lua chunks (source or precompiled).
-	luaL_dostring(L, "package.path = './?.lua;./?.ois;./?/init.lua;./?/init.ois' package.cpath = '' package.searchers[4] = nil package.searchers[3] = nil");
+	// Done through the C API rather than as a chunk of Lua, which a compiled game's Lua could not parse.
+	lua_pushcfunction(L, restrict_package_search);
+	if (lua_pcall(L, 0, 0, 0) != LUA_OK) lua_pop(L, 1);
 }
 
 void lua_state::expose_nvgt(bool as_globals) {
@@ -95,57 +116,180 @@ bool lua_state::exec_file(const std::string& filename) {
 	return true;
 }
 
-// Installed once per lua_state by the first set_pack. Everything consults package.pack at call time, so later
-// set_pack calls only swap that field. Returns the pack-aware loadfile, which exec_file uses as well.
-static const char* pack_hooks_lua = R"LUA(
-local package, load, loadfile_disk, select, error, concat = package, load, loadfile, select, error, table.concat
-local function normalize(name)
-	name = name:gsub("\\", "/"):gsub("//+", "/")
-	while name:sub(1, 2) == "./" do name = name:sub(3) end
-	return name
-end
-local function read(name)
-	local pack = package.pack
-	if not pack then return nil end
-	name = normalize(name)
-	if not pack:file_exists(name) then return nil end
-	return pack:get_file(name):read(), name
-end
-local function pack_loadfile(filename, mode, ...)
-	if filename ~= nil then
-		local src, name = read(filename)
-		if src then
-			-- an explicit nil env would count as given, so only pass env through when the caller did
-			if select("#", ...) > 0 then return load(src, "@" .. name, mode or "bt", (...)) end
-			return load(src, "@" .. name, mode or "bt")
-		end
-	end
-	return loadfile_disk(filename, mode, ...)
-end
-loadfile = pack_loadfile
-function dofile(filename)
-	local f, err = pack_loadfile(filename)
-	if not f then error(err, 2) end
-	return f()
-end
--- searched right after package.preload, so a module in the pack wins over one on disk
-table.insert(package.searchers, 2, function(modname)
-	if not package.pack then return nil end
-	local base = modname:gsub("%.", "/")
-	local tried = {}
-	for template in package.path:gmatch("[^;]+") do
-		local src, name = read((template:gsub("%?", base)))
-		if src then
-			local f, err = load(src, "@" .. name)
-			if not f then error(("error loading module '%s' from pack file '%s':\n\t%s"):format(modname, name, err), 2) end
-			return f, name
-		end
-		tried[#tried + 1] = "no file '" .. normalize((template:gsub("%?", base))) .. "' in pack"
-	end
-	return concat(tried, "\n\t")
-end)
-return pack_loadfile
-)LUA";
+// The pack hooks installed by the first set_pack. They are C rather than a chunk of Lua, which a compiled game's Lua
+// could not parse. Everything consults package.pack at call time, so later set_pack calls only swap that field.
+
+// A pack path as pack_file stores it: forward slashes, no doubled ones and no leading ./
+static std::string pack_normalize(const char* name, size_t len) {
+	std::string out;
+	out.reserve(len);
+	for (size_t i = 0; i < len; i++) {
+		char c = name[i] == '\\' ? '/' : name[i];
+		if (c == '/' && !out.empty() && out.back() == '/') continue;
+		out += c;
+	}
+	size_t skip = 0;
+	while (out.compare(skip, 2, "./") == 0) skip += 2;
+	return out.substr(skip);
+}
+
+// Looks name up in package.pack, with the package table at package_index. On success pushes the file's contents and
+// its normalized name and returns true; otherwise leaves the stack as it was.
+static bool pack_read(lua_State* L, int package_index, const char* name, size_t len) {
+	lua_getfield(L, package_index, "pack");
+	if (!lua_toboolean(L, -1)) {
+		lua_pop(L, 1);
+		return false;
+	}
+	int pack = lua_gettop(L);
+	std::string normalized = pack_normalize(name, len);
+	lua_getfield(L, pack, "file_exists");
+	lua_pushvalue(L, pack);
+	lua_pushlstring(L, normalized.data(), normalized.size());
+	lua_call(L, 2, 1);
+	bool exists = lua_toboolean(L, -1);
+	lua_pop(L, 1);
+	if (!exists) {
+		lua_pop(L, 1);
+		return false;
+	}
+	lua_getfield(L, pack, "get_file");
+	lua_pushvalue(L, pack);
+	lua_pushlstring(L, normalized.data(), normalized.size());
+	lua_call(L, 2, 1); // the file
+	lua_getfield(L, -1, "read");
+	lua_insert(L, -2);
+	lua_call(L, 1, 1); // its contents
+	if (!lua_isstring(L, -1)) luaL_error(L, "could not read '%s' from the pack", normalized.c_str());
+	lua_remove(L, pack);
+	lua_pushlstring(L, normalized.data(), normalized.size());
+	return true;
+}
+
+// Replaces loadfile: loadfile(filename [, mode [, env]]) loads from the pack when it has the file, else from the disk.
+// Upvalues: the package table, the original loadfile.
+static int pack_loadfile(lua_State* L) {
+	int nargs = lua_gettop(L);
+	if (!lua_isnoneornil(L, 1)) {
+		size_t len;
+		const char* filename = luaL_checklstring(L, 1, &len);
+		const char* mode = luaL_optstring(L, 2, "bt"); // before pack_read pushes onto the stack
+		if (pack_read(L, lua_upvalueindex(1), filename, len)) {
+			size_t source_len;
+			const char* source = lua_tolstring(L, -2, &source_len);
+			std::string chunkname = std::string("@") + lua_tostring(L, -1);
+			if (luaL_loadbufferx(L, source, source_len, chunkname.c_str(), mode) != LUA_OK) {
+				luaL_pushfail(L);
+				lua_insert(L, -2);
+				return 2; // fail, message
+			}
+			if (nargs >= 3) { // an explicit nil env counts as given, as it does for load
+				lua_pushvalue(L, 3);
+				if (!lua_setupvalue(L, -2, 1)) lua_pop(L, 1);
+			}
+			return 1;
+		}
+	}
+	lua_pushvalue(L, lua_upvalueindex(2));
+	lua_insert(L, 1);
+	lua_call(L, nargs, LUA_MULTRET);
+	return lua_gettop(L);
+}
+
+static int pack_dofile_continue(lua_State* L, int status, lua_KContext ctx) {
+	(void)status;
+	(void)ctx;
+	return lua_gettop(L) - 1;
+}
+
+// Replaces dofile so it goes through pack_loadfile. Upvalue: pack_loadfile.
+static int pack_dofile(lua_State* L) {
+	lua_settop(L, 1);
+	lua_pushvalue(L, lua_upvalueindex(1));
+	lua_pushvalue(L, 1);
+	lua_call(L, 1, 2);
+	if (!lua_toboolean(L, -2)) {
+		if (lua_type(L, -1) == LUA_TSTRING) { // as error(message, 2) would: where dofile was called from
+			luaL_where(L, 1);
+			lua_insert(L, -2);
+			lua_concat(L, 2);
+		}
+		return lua_error(L);
+	}
+	lua_pop(L, 1);
+	lua_callk(L, 0, LUA_MULTRET, 0, pack_dofile_continue); // continuation keeps yields across dofile working
+	return pack_dofile_continue(L, LUA_OK, 0);
+}
+
+// The package.searchers entry that finds modules in the pack, right after package.preload so a module in the pack wins
+// over one on the disk. It resolves modname through package.path like the stock Lua searcher. Upvalue: package table.
+static int pack_searcher(lua_State* L) {
+	const char* modname = luaL_checkstring(L, 1);
+	lua_getfield(L, lua_upvalueindex(1), "pack");
+	bool have_pack = lua_toboolean(L, -1);
+	lua_pop(L, 1);
+	if (!have_pack) return 0;
+	std::string base = modname;
+	for (char& c : base) if (c == '.') c = '/';
+	lua_getfield(L, lua_upvalueindex(1), "path");
+	const char* path = lua_tostring(L, -1);
+	if (!path) return luaL_error(L, "'package.path' must be a string");
+	std::string templates = path;
+	lua_pop(L, 1);
+	std::string tried;
+	for (size_t pos = 0; pos <= templates.size();) {
+		size_t sep = templates.find(';', pos);
+		if (sep == std::string::npos) sep = templates.size();
+		std::string filename;
+		for (size_t i = pos; i < sep; i++) {
+			if (templates[i] == '?') filename += base;
+			else filename += templates[i];
+		}
+		pos = sep + 1;
+		if (filename.empty()) continue;
+		if (pack_read(L, lua_upvalueindex(1), filename.data(), filename.size())) {
+			size_t source_len;
+			const char* source = lua_tolstring(L, -2, &source_len);
+			std::string name = lua_tostring(L, -1);
+			std::string chunkname = "@" + name;
+			if (luaL_loadbufferx(L, source, source_len, chunkname.c_str(), nullptr) != LUA_OK) {
+				lua_pushfstring(L, "error loading module '%s' from pack file '%s':\n\t%s", modname, name.c_str(), lua_tostring(L, -1));
+				return lua_error(L);
+			}
+			lua_pushlstring(L, name.data(), name.size());
+			return 2; // loader, file name
+		}
+		if (!tried.empty()) tried += "\n\t";
+		tried += "no file '" + pack_normalize(filename.data(), filename.size()) + "' in pack";
+	}
+	lua_pushlstring(L, tried.data(), tried.size());
+	return 1;
+}
+
+// Run protected by the first set_pack. Installs the hooks and returns pack_loadfile, which exec_file uses as well.
+static int install_pack_hooks(lua_State* L) {
+	lua_getglobal(L, "package");
+	int package = lua_gettop(L);
+	lua_pushvalue(L, package);
+	lua_getglobal(L, "loadfile");
+	lua_pushcclosure(L, pack_loadfile, 2);
+	lua_pushvalue(L, -1);
+	lua_setglobal(L, "loadfile");
+	lua_pushvalue(L, -1);
+	lua_pushcclosure(L, pack_dofile, 1);
+	lua_setglobal(L, "dofile");
+	// table.insert(package.searchers, 2, pack_searcher)
+	if (lua_getfield(L, package, "searchers") != LUA_TTABLE) return luaL_error(L, "'package.searchers' must be a table");
+	for (lua_Integer i = luaL_len(L, -1); i >= 2; i--) {
+		lua_geti(L, -1, i);
+		lua_seti(L, -2, i + 1);
+	}
+	lua_pushvalue(L, package);
+	lua_pushcclosure(L, pack_searcher, 1);
+	lua_seti(L, -2, 2);
+	lua_pop(L, 1);
+	return 1; // pack_loadfile
+}
 
 // The parameter is a variable type (?&in) rather than pack_file@: compiled games load plugins before
 // NVGT registers its own API, so naming pack_file in the declaration would fail to register there.
@@ -174,8 +318,8 @@ bool lua_state::set_pack(void* ref, int type_id) {
 		return false;
 	}
 	if (pack_loadfile_ref == LUA_NOREF) {
-		int r = luaL_loadbuffer(L, pack_hooks_lua, strlen(pack_hooks_lua), "=nvgt_pack");
-		if (r == LUA_OK) r = lua_pcall(L, 0, 1, 0);
+		lua_pushcfunction(L, install_pack_hooks);
+		int r = lua_pcall(L, 0, 1, 0);
 		if (r != LUA_OK) {
 			const char* msg = lua_tostring(L, -1);
 			last_error = msg ? msg : "unknown lua error";
@@ -294,6 +438,74 @@ static std::string lua_version_string() {
 	return LUA_RELEASE;
 }
 
+// Defined in lua55.cpp: false in the bytecode-only Lua that NVGT's stubs link when the plugin is linked statically.
+bool nvgt_lua_has_compiler();
+
+static void raise_script_exception(const std::string& message) {
+	asIScriptContext* ctx = asGetActiveContext();
+	if (ctx) ctx->SetException(message.c_str());
+}
+
+static int compile_writer(lua_State* L, const void* p, size_t size, void* ud) {
+	(void)L;
+	static_cast<std::string*>(ud)->append(static_cast<const char*>(p), size);
+	return 0;
+}
+
+// Compiles a chunk to bytecode in a throwaway lua_State. On failure raises a script exception and returns false.
+static bool compile_chunk(const std::string& source, const std::string& chunkname, bool strip, std::string& bytecode, const char* caller) {
+	if (!nvgt_lua_has_compiler()) {
+		raise_script_exception(std::string(caller) + " is not available in compiled games, whose Lua can only load precompiled code; compile the Lua code with nvgt beforehand");
+		return false;
+	}
+	lua_State* L = luaL_newstate();
+	if (!L) {
+		raise_script_exception(std::string(caller) + ": not enough memory");
+		return false;
+	}
+	int r = luaL_loadbufferx(L, source.data(), source.size(), chunkname.c_str(), nullptr);
+	if (r != LUA_OK) {
+		const char* msg = lua_tostring(L, -1);
+		std::string error = msg ? msg : "unknown lua error";
+		lua_close(L);
+		raise_script_exception(error);
+		return false;
+	}
+	bytecode.clear();
+	r = lua_dump(L, compile_writer, &bytecode, strip ? 1 : 0);
+	lua_close(L);
+	if (r != 0) {
+		raise_script_exception(std::string(caller) + ": could not write the bytecode");
+		return false;
+	}
+	return true;
+}
+
+static std::string lua_compile(const std::string& source, const std::string& chunkname, bool strip) {
+	std::string bytecode;
+	if (!compile_chunk(source, chunkname.empty() ? "=nvgt" : chunkname, strip, bytecode, "lua_compile")) return "";
+	return bytecode;
+}
+
+// Paths are UTF-8, as everywhere in NVGT.
+static void lua_compile_file(const std::string& input, const std::string& output, bool strip) {
+	std::string bytecode;
+	if (!nvgt_lua_has_compiler()) { // say so before complaining about a missing input file
+		compile_chunk("", "", strip, bytecode, "lua_compile_file");
+		return;
+	}
+	std::ifstream in(std::filesystem::path(std::u8string(input.begin(), input.end())), std::ios::binary);
+	if (!in) {
+		raise_script_exception("lua_compile_file: cannot open " + input);
+		return;
+	}
+	std::string source((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+	in.close();
+	if (!compile_chunk(source, "@" + input, strip, bytecode, "lua_compile_file")) return;
+	std::ofstream out(std::filesystem::path(std::u8string(output.begin(), output.end())), std::ios::binary | std::ios::trunc);
+	if (!out || !out.write(bytecode.data(), bytecode.size())) raise_script_exception("lua_compile_file: cannot write " + output);
+}
+
 plugin_main(nvgt_plugin_shared* shared) {
 	if (!prepare_plugin(shared)) return false;
 	asIScriptEngine* engine = shared->script_engine;
@@ -326,5 +538,7 @@ plugin_main(nvgt_plugin_shared* shared) {
 	engine->RegisterObjectMethod("lua_state", "bool set_global(const string&in name, const ?&in value)", asMETHOD(lua_state, set_global), asCALL_THISCALL);
 	engine->RegisterObjectMethod("lua_state", "bool get_global(const string&in name, ?&out value)", asMETHOD(lua_state, get_global), asCALL_THISCALL);
 	engine->RegisterGlobalFunction("string lua_version()", asFUNCTION(lua_version_string), asCALL_CDECL);
+	engine->RegisterGlobalFunction("string lua_compile(const string&in source, const string&in chunkname = \"\", bool strip = false)", asFUNCTION(lua_compile), asCALL_CDECL);
+	engine->RegisterGlobalFunction("void lua_compile_file(const string&in input, const string&in output, bool strip = false)", asFUNCTION(lua_compile_file), asCALL_CDECL);
 	return true;
 }

@@ -1,6 +1,8 @@
 /* lua55.cpp - compiles the entire vendored Lua 5.5 distribution as a single C++ translation unit.
  * Building Lua as C++ makes lua_error use C++ exceptions instead of longjmp, which is required for it to safely
  * unwind through the bridge's C++ stack frames. The include order mirrors upstream's onelua.c.
+ * With NVGT_LUA_BYTECODE_ONLY defined it builds Lua without its compiler and bytecode writer instead, for the stubs
+ * of an NVGT that links the plugin statically; see lnoparser.c.
  */
 
 #define LUA_CORE
@@ -21,15 +23,19 @@
 #include "lua55/lopcodes.c"
 #include "lua55/lmem.c"
 #include "lua55/lundump.c"
+#ifndef NVGT_LUA_BYTECODE_ONLY
 #include "lua55/ldump.c"
+#endif
 #include "lua55/lstate.c"
 #include "lua55/lgc.c"
+#ifndef NVGT_LUA_BYTECODE_ONLY
 #include "lua55/llex.c"
 // llex.c defines a next(ls) macro for its own use; undefine it so it cannot clash with std::next when later files
 // pull in standard library headers compiled as C++ (breaks the build with libstdc++).
 #undef next
 #include "lua55/lcode.c"
 #include "lua55/lparser.c"
+#endif
 #include "lua55/ldebug.c"
 #include "lua55/lfunc.c"
 #include "lua55/lobject.c"
@@ -55,3 +61,12 @@
 #include "lua55/ltablib.c"
 #include "lua55/lutf8lib.c"
 #include "lua55/linit.c"
+
+// The bytecode-only build for NVGT's stubs (see lnoparser.c and _SConscript) stands in for the front-end left out
+// above. lua.cpp asks which build it was linked with, so lua_compile can say why it fails in a compiled game.
+#ifdef NVGT_LUA_BYTECODE_ONLY
+#include "lnoparser.c"
+bool nvgt_lua_has_compiler() { return false; }
+#else
+bool nvgt_lua_has_compiler() { return true; }
+#endif

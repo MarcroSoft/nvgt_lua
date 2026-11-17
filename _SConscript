@@ -41,4 +41,11 @@ if ARGUMENTS.get("no_shared_plugins", "0") == "0" and env["NVGT_TARGET"] != "ios
 static_defines = list(env["CPPDEFINES"]) + [("NVGT_PLUGIN_STATIC", "lua")]
 static_objects = [env.Object(s[:-4] + "_static", s, CPPDEFINES = static_defines) for s in sources]
 static = env.StaticLibrary("#build/lib/lua", static_objects)
+# When NVGT links the plugin statically, its stubs get a Lua without the compiler and bytecode writer (see lnoparser.c),
+# so compiled games load only Lua code precompiled with lua_compile or lua_compile_file. NVGT's SConstruct links this
+# library into the stubs in place of the one above. An NVGT whose SConstruct can't do that links the full Lua everywhere.
+if linked_statically() and env.get("NVGT_STUB_LIBS"):
+	stub_objects = static_objects[:-1] + [env.Object("lua55_stub", "lua55.cpp", CPPDEFINES = static_defines + ["NVGT_LUA_BYTECODE_ONLY"])]
+	libraries = {"nvgt": static, "stub": env.StaticLibrary("#build/lib/lua_stub", stub_objects)}
+	Return("libraries")
 Return("static")
