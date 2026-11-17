@@ -32,7 +32,7 @@ jobs:
             target: release/lib/liblua.so
             scons_install: pip3 install scons
           - name: macos
-            os: macos-14
+            os: macos-26
             devlibs: macosdev
             target: release/lib/liblua.dylib
             scons_install: pip3 install scons --break-system-packages
