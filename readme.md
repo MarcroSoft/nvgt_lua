@@ -33,7 +33,7 @@ Note that only what is registered with the engine itself is visible. Functions a
 * `bool exec(const string&in code, const string&in chunkname = "")`: run a string of Lua code.
 * `bool exec_file(const string&in filename)`: run a Lua file (path is relative to the working directory).
 * `bool call(const string&in function_name)`: call a global Lua function without arguments.
-* `bool set_pack(const ?&in pack)`: load Lua code from an NVGT pack, given as a `pack_file` object or handle (the parameter is a variable type only because compiled games register plugins before NVGT's own types, so the declaration can't name `pack_file`; anything else is rejected with an error in `last_error`). Afterwards `exec_file`, `require`, `loadfile` and `dofile` look in the pack first and fall back to the disk, so a game can ship its Lua code inside a pack (precompiled, if the plugin is linked statically; see below) — including one embedded with `#pragma embed`. `require` resolves modules through `package.path` as usual, with paths taken relative to the pack root. The pack is also available to Lua as `package.pack`, so game code can call `package.pack:file_exists(name)`, `list_files()` or `get_file(name):read()` for its own data. Pass null to go back to loading from the disk only. Requires `open_libraries` and `expose_nvgt`. Only Lua loading is affected: `io.open` still reads the disk, and sounds come from the pack only if you also set `sound_default_pack`.
+* `bool set_pack(const ?&in pack)`: load Lua code from an NVGT pack, given as a `pack_file` object or handle (the parameter is a variable type only because compiled games register plugins before NVGT's own types, so the declaration can't name `pack_file`; anything else is rejected with an error in `last_error`). Afterwards `exec_file`, `require`, `loadfile` and `dofile` look in the pack first and fall back to the disk, so a game can ship its Lua code inside a pack (as source or as bytecode precompiled with `lua_compile`) — including one embedded with `#pragma embed`. `require` resolves modules through `package.path` as usual, with paths taken relative to the pack root. The pack is also available to Lua as `package.pack`, so game code can call `package.pack:file_exists(name)`, `list_files()` or `get_file(name):read()` for its own data. Pass null to go back to loading from the disk only. Requires `open_libraries` and `expose_nvgt`. Only Lua loading is affected: `io.open` still reads the disk, and sounds come from the pack only if you also set `sound_default_pack`.
 
 ```angelscript
 pack_file game_data;
@@ -52,7 +52,7 @@ L.exec_file("main.lua");
 * Global function `string lua_compile(const string&in source, const string&in chunkname = "", bool strip = false)` compiles Lua source code to bytecode and returns it. `chunkname` follows Lua's convention as in `exec`: `@main.lua` makes errors read `main.lua:12:`. The chunk is not run. A syntax error raises a script exception with Lua's message. With `strip` set, debug information (line numbers, local names) is left out, which makes the bytecode smaller but error messages less useful.
 * Global function `void lua_compile_file(const string&in input, const string&in output, bool strip = false)` compiles the Lua file `input` and writes its bytecode to `output`, with `@` plus the input path as the chunk name. Errors raise a script exception.
 
-Bytecode loads anywhere source does — `exec`, `exec_file`, `require`, `load`, `loadfile`, `dofile` and through `set_pack` — and an `.lua` or `.ois` file may contain either. It must come from the same Lua release (see `lua_version`). When the plugin is linked statically into NVGT, compiled games can only load bytecode; see below.
+Bytecode loads anywhere source does — `exec`, `exec_file`, `require`, `load`, `loadfile`, `dofile` and through `set_pack` — and an `.lua` or `.ois` file may contain either. It must come from the same Lua release (see `lua_version`).
 
 ## conversions and helpers
 * Numbers, strings, booleans and enums convert automatically in both directions; enum constants are available by name, e.g. `nvgt.KEY_RETURN`.
@@ -88,7 +88,7 @@ What it cannot cover:
 * Reading dictionary values from Lua requires going through functions that return concrete types; `nvgt.totable` only accepts arrays.
 
 ## building
-The plugin is developed and distributed independently of NVGT, but builds inside NVGT's build system, so it needs to sit at `plugin/lua` in an NVGT checkout. The [MarcroSoft/nvgt](https://github.com/MarcroSoft/nvgt) fork carries it there as a submodule pinned to a commit of this repository: clone the fork with `--recurse-submodules`, or run `git submodule update --init plugin/lua` in an existing checkout. Upstream [samtupy/nvgt](https://github.com/samtupy/nvgt) does not include it, so there clone this repository to `plugin/lua` yourself. Then from the NVGT root run:
+The plugin is developed and distributed independently of NVGT, but builds inside NVGT's build system, so it needs to sit at `plugin/lua` in an NVGT checkout. The [Sightless-Soundworks/nvgt](https://github.com/Sightless-Soundworks/nvgt) fork carries it there as a submodule pinned to a commit of this repository: clone the fork with `--recurse-submodules`, or run `git submodule update --init plugin/lua` in an existing checkout. Upstream [samtupy/nvgt](https://github.com/samtupy/nvgt) does not include it, so there clone this repository to `plugin/lua` yourself. Then from the NVGT root run:
 
 ```bash
 scons plugins=lua release/lib/lua.dll
@@ -97,12 +97,10 @@ scons plugins=lua release/lib/lua.dll
 replacing the target with `release/lib/liblua.so` on Linux or `release/lib/liblua.dylib` on macOS. For Android, set `ANDROID_NDK_HOME` and run `scons target=android plugins=lua release/lib_android/lua.so`; for iOS (which cannot load shared plugins) build the static library into the stubs with `scons target=ios plugins=lua static_lua_plugin=1`. Building all of NVGT with a plain `scons` also builds the plugin when it is present at plugin/lua. The .github/workflows/build.yml workflow in this repository builds the shared plugin for Windows, Linux, macOS and Android.
 
 ### linking it into NVGT
-On any platform the plugin can instead be linked statically into nvgt itself and its stubs, so games need no lua shared library and one can't be swapped out from under them. Pass `static_lua_plugin=1` to scons, or add a line `lua` to `user/static_plugins` in the NVGT checkout; either way the shared library is then not built at all, since it would only go unused. `#pragma plugin lua` works unchanged, as NVGT looks for statically linked plugins first. The MarcroSoft/nvgt fork's release workflow does this for Windows, Linux, macOS, iOS and Android, building whichever commit its plugin/lua submodule is pinned to.
+On any platform the plugin can instead be linked statically into nvgt itself and its stubs, so games need no lua shared library and one can't be swapped out from under them. Pass `static_lua_plugin=1` to scons, or add a line `lua` to `user/static_plugins` in the NVGT checkout; either way the shared library is then not built at all, since it would only go unused. `#pragma plugin lua` works unchanged, as NVGT looks for statically linked plugins first. The Sightless-Soundworks/nvgt fork's release workflow does this for Windows, Linux, macOS, iOS and Android, building whichever commit its plugin/lua submodule is pinned to.
 
-#### compiled games load only precompiled Lua
-When the plugin is linked statically, NVGT's stubs get a build of Lua without its compiler, as [Oidua](https://github.com/MarcroSoft/Oidua) does for its games: the lexer, parser, code generator and bytecode writer (`llex`, `lparser`, `lcode`, `ldump`) are left out, which keeps about 80 KB out of every compiled game on Windows. `lnoparser.c` stands in for them, and every file in `lua55` stays the official release. All the standard libraries remain, so `require`, `package.path` and the pack lookup work as before.
-
-A compiled game can therefore run only Lua code compiled with `lua_compile` or `lua_compile_file` beforehand. Lua source handed to `exec`, `exec_file`, `require`, `load` or `set_pack`'s lookup fails with LUA_ERRSYNTAX and a message saying so, `string.dump` raises an error, and `lua_compile` and `lua_compile_file` raise a script exception. While you run the game from source with nvgt, everything works as usual, source and bytecode alike. A small build script that compiles the Lua files into the pack before you compile the game is enough:
+#### precompiling Lua for a game
+A statically linked plugin carries the full Lua into the stubs, compiler included, so compiled games run Lua source just as nvgt does. Precompiling is optional: it saves compiling the code each time the game starts and keeps the plain source out of what you ship. A small build script that compiles the Lua files into a pack before you compile the game is enough:
 
 ```angelscript
 #pragma plugin lua
@@ -117,6 +115,11 @@ void main() {
 }
 ```
 
-The game then embeds `game.dat` with `#pragma embed`, calls `set_pack` and loads its Lua as before. A game that uses the shared `lua` library instead keeps the full Lua, compiler included.
+The game then embeds `game.dat` with `#pragma embed`, calls `set_pack` and loads its Lua as before.
+
+#### a stub Lua without the compiler
+The plugin can also give NVGT's stubs a build of Lua without its compiler, as [Oidua](https://github.com/MarcroSoft/Oidua) does for its games: the lexer, parser, code generator and bytecode writer (`llex`, `lparser`, `lcode`, `ldump`) are left out, which keeps about 80 KB out of every compiled game on Windows. `lnoparser.c` stands in for them, and every file in `lua55` stays the official release. A compiled game built that way can run only Lua code compiled with `lua_compile` or `lua_compile_file` beforehand: Lua source handed to `exec`, `exec_file`, `require`, `load` or `set_pack`'s lookup fails with LUA_ERRSYNTAX and a message saying so, `string.dump` raises an error, and `lua_compile` and `lua_compile_file` raise a script exception.
+
+This only happens when NVGT's SConstruct asks for it, by setting `NVGT_STUB_LIBS` in the plugin environment and linking the `stub` library that `_SConscript` then returns into the stubs. Neither upstream NVGT nor the Sightless-Soundworks/nvgt fork does that at the moment, so their stubs get the full Lua.
 
 The Lua 5.5 sources are vendored under lua55 and compiled into the plugin as a single C++ translation unit (lua55.cpp), so lua errors unwind safely through the bridge with C++ exceptions and no external dependency is needed. Lua is distributed under the MIT license, see license.md.
